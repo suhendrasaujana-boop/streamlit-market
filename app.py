@@ -128,7 +128,7 @@ if data['Close'].iloc[-1] > data['resistance'].iloc[-2]:
     st.success("🔥 BREAKOUT DETECTED")
 
 # =========================
-# RISK METER (MOVED HERE FOR BETTER FLOW)
+# RISK METER
 # =========================
 st.subheader("🎯 Risk Meter")
 
@@ -170,7 +170,7 @@ def scan_market():
     for t in ihsg_list:
         try:
             d = data[t]
-            if len(d) > 20:  # Ensure enough data
+            if len(d) > 20:
                 rsi = ta.momentum.rsi(d['Close']).iloc[-1]
                 sma20 = d['Close'].rolling(20).mean().iloc[-1]
 
@@ -180,7 +180,6 @@ def scan_market():
 
                 rows.append([t, round(rsi,2), score])
         except Exception as e:
-            st.write(f"Error loading {t}: {e}")
             pass
 
     return pd.DataFrame(rows, columns=["Ticker","RSI","Score"])
@@ -421,34 +420,220 @@ else:
     st.error("🔴 AVOID")
 
 # =========================
-# GLOSSARY
+# GLOSSARY LENGKAP
 # =========================
-with st.expander("📖 Glossary (Klik untuk lihat penjelasan)"):
-    st.write("""
-    **RSI** : Indikator overbought / oversold  
-    - RSI < 30 → Oversold (potensi naik)  
-    - RSI > 70 → Overbought (potensi turun)
-
-    **SMA20 / SMA50** : Moving average untuk melihat trend
-    - Harga di atas SMA → Trend naik
-    - Harga di bawah SMA → Trend turun
-
-    **MACD** : Momentum trend
-    - MACD cross up → bullish
-    - MACD cross down → bearish
-
-    **Volume Spike** : Lonjakan volume menandakan minat besar
-
-    **Support** : Area harga bawah tempat harga sering memantul
-
-    **Resistance** : Area harga atas tempat harga sering ditolak
-
-    **Breakout** : Harga menembus resistance → sinyal bullish
-
-    **AI Score** :
-    - 0-2 → Bearish
-    - 3 → Netral
-    - 4-5 → Bullish
+with st.expander("📖 GLOSSARY LENGKAP (Klik untuk lihat semua penjelasan)"):
+    
+    st.markdown("### 📊 TECHNICAL INDICATORS")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **1. RSI (Relative Strength Index)**
+        - Mengukur kekuatan pergerakan harga
+        - RSI < 30 → Oversold (potensi naik)
+        - RSI > 70 → Overbought (potensi turun)
+        - RSI 30-70 → Normal
+            
+        **2. SMA (Simple Moving Average)**
+        - Rata-rata harga dalam periode tertentu
+        - SMA20: Trend jangka pendek (1 bulan)
+        - SMA50: Trend jangka menengah (2-3 bulan)
+        - Harga > SMA = Trend naik
+        - Harga < SMA = Trend turun
+            
+        **3. MACD (Moving Average Convergence Divergence)**
+        - Indikator momentum dan trend
+        - MACD > Signal = Bullish
+        - MACD < Signal = Bearish
+        - Garis histogram menunjukkan kekuatan trend
+        """)
+    
+    with col2:
+        st.markdown("""
+        **4. Volume & Volume MA**
+        - Volume: Jumlah saham yang diperdagangkan
+        - Volume MA: Rata-rata volume 20 hari
+        - Volume > MA(20)×1.8 = Volume Spike
+        - Volume tinggi = Minat besar
+            
+        **5. Support & Resistance**
+        - Support: Level harga terendah (area beli)
+        - Resistance: Level harga tertinggi (area jual)
+        - Support (20 periode): Low terendah 20 hari
+        - Resistance (20 periode): High tertinggi 20 hari
+        """)
+    
+    st.markdown("---")
+    st.markdown("### 🎯 SIGNAL & SCORING SYSTEMS")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **AI Score (0-5)**
+        - +1: RSI < 35 (Oversold)
+        - +1: Harga > SMA20
+        - +1: SMA20 > SMA50 (Golden Cross)
+        - +1: MACD > Signal
+        - +1: Volume > Rata-rata
+        - 4-5: STRONG BUY 🚀
+        - 3: HOLD 🟡
+        - 0-2: SELL 🔻
+            
+        **Probability Engine**
+        - Menghitung peluang Bullish/Bearish
+        - Bull > 60% = Potensi naik
+        - Bear > 60% = Potensi turun
+        """)
+    
+    with col2:
+        st.markdown("""
+        **Trend Score (0-3)**
+        - +1: Harga > SMA20
+        - +1: SMA20 > SMA50 (Uptrend)
+        - +1: RSI > 50 (Momentum positif)
+        - 3: Strong Uptrend
+        - 2: Moderate Uptrend
+        - 1: Weak Trend
+            
+        **Risk Meter**
+        - Volatilitas dari return harian
+        - < 1.5% = LOW RISK ✅
+        - 1.5-3% = MEDIUM RISK ⚠️
+        - > 3% = HIGH RISK 🔴
+        """)
+    
+    st.markdown("---")
+    st.markdown("### 🚀 TRADING SIGNALS")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **Breakout Signals**
+        - Breakout: Harga > Resistance
+        - Breakdown: Harga < Support
+        - Breakout Strength: (Harga - Resistance)/Resistance × 100%
+        - Strong breakout > 3%
+            
+        **Momentum Detector**
+        - Change 5 hari terakhir × 100%
+        - > 5%: Strong Up Momentum 🔥
+        - 2-5%: Moderate Up Momentum 📈
+        - -2 s/d 2%: Sideways ➡️
+        - < -5%: Strong Down Momentum 📉
+        """)
+    
+    with col2:
+        st.markdown("""
+        **Risk Reward Ratio**
+        - RR = (Target1 - Entry) / (Entry - Stop Loss)
+        - RR > 2: Good Setup ✅
+        - RR 1-2: Moderate Setup ⚠️
+        - RR < 1: Bad Setup 🔴
+            
+        **Volume Spike Alert**
+        - Volume > MA(20) × 1.8
+        - Menandakan minat institusi
+        - Konfirmasi breakout lebih valid
+        """)
+    
+    st.markdown("---")
+    st.markdown("### 🧠 GOD MODE COMPONENTS")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **Smart Entry**
+        - Formula: (Support + Current Price) / 2
+        - Entry di area support untuk safety
+        - Menghindari FOMO (Fear Of Missing Out)
+            
+        **Stop Loss**
+        - Formula: Support × 0.97
+        - Stop loss 3% di bawah support
+        - Proteksi modal maksimal -5-7%
+        """)
+    
+    with col2:
+        st.markdown("""
+        **Target Profit**
+        - Target 1: Resistance level
+        - Target 2: Resistance × 1.05 (+5%)
+        - Ambil profit bertahap
+            
+        **God Score (0-4)**
+        - +1: RR > 2
+        - +1: Trend Score ≥ 2
+        - +1: RSI < 70 (Tidak overbought)
+        - +1: Harga > SMA20
+        - 3-4: GOD MODE BUY 🚀
+        - 2: SPEC BUY ⚡
+        - 0-1: NO TRADE ❌
+        """)
+    
+    st.markdown("---")
+    st.markdown("### 📈 MARKET SCANNER")
+    
+    st.markdown("""
+    **IHSG Scanner Logic**
+    - Memindai 15 saham blue chip IHSG
+    - Filter: RSI oversold & Harga > SMA20
+    - Score 0-2 untuk setiap saham
+    - Top 5 saham dengan score tertinggi
+            
+    **Market Momentum**
+    - Menghitung up/down days dalam 20 hari
+    - Up days > Down days = Bullish market
+    - Down days > Up days = Bearish market
+    """)
+    
+    st.markdown("---")
+    st.markdown("### ⚠️ INTERPRETASI SCORE")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.info("**🔥 STRONG BUY (4-5)**")
+        st.write("""
+        - Semua indikator bullish
+        - Momentum kuat
+        - Risiko rendah-medium
+        - Cocok untuk entry
+        """)
+    
+    with col2:
+        st.warning("**🟡 HOLD/WAIT (3)**")
+        st.write("""
+        - Indikator mixed
+        - Tunggu konfirmasi
+        - Perketat stop loss
+        - Observasi dulu
+        """)
+    
+    with col3:
+        st.error("**🔴 SELL/AVOID (0-2)**")
+        st.write("""
+        - Indikator bearish
+        - Momentum turun
+        - Risiko tinggi
+        - Hindari entry baru
+        """)
+    
+    st.markdown("---")
+    st.markdown("### 💡 TIPS PENGGUNAAN")
+    
+    st.success("""
+    1. **Multi-Timeframe**: Cek timeframe 1d, 1wk, 1mo untuk konfirmasi trend
+    2. **Konfirmasi**: Jangan hanya andalkan 1 indikator
+    3. **Risk Management**: Selalu gunakan stop loss (max 5-7%)
+    4. **Volume Penting**: Breakout tanpa volume = false breakout
+    5. **Market Scanner**: Cek saham lain jika saham utama sedang bearish
+    6. **God Mode**: Gunakan untuk entry yang lebih akurat
+    7. **Probabilitas**: Bukan kepastian, selalu siap dengan skenario alternatif
     """)
 
 # =========================
