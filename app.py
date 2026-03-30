@@ -5,13 +5,12 @@ import ta
 import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Market Dashboard ULTIMATE")
+st.title("🚀 Smart Market Dashboard ULTIMATE PRO")
 
 # =========================
 # INPUT
 # =========================
 col1, col2 = st.columns(2)
-
 ticker = col1.text_input("Ticker", "BBRI.JK")
 timeframe = col2.selectbox("Timeframe", ["1d","1wk","1mo"])
 
@@ -20,7 +19,7 @@ timeframe = col2.selectbox("Timeframe", ["1d","1wk","1mo"])
 # =========================
 @st.cache_data
 def load_data(ticker, timeframe):
-    data = yf.download(ticker, period="1y", interval=timeframe)
+    data = yf.download(ticker, period="1y", interval=timeframe, progress=False)
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
     return data
@@ -53,8 +52,7 @@ fig.add_trace(go.Candlestick(
     open=data['Open'],
     high=data['High'],
     low=data['Low'],
-    close=data['Close'],
-    name="Price"
+    close=data['Close']
 ))
 
 fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], name="SMA20"))
@@ -102,8 +100,6 @@ st.metric("Score", f"{score}/4")
 # =========================
 # SIGNAL
 # =========================
-st.subheader("Signal")
-
 if score >= 3:
     st.success("STRONG BUY 🚀")
 elif score == 2:
@@ -112,21 +108,45 @@ else:
     st.error("SELL ⚠️")
 
 # =========================
-# SCANNER IHSG SIMPLE
+# SCANNER IHSG BATCH
 # =========================
-st.subheader("Quick Scanner")
+st.subheader("🔥 Top RSI Scanner")
 
-ihsg_list = ["BBRI.JK","BBCA.JK","TLKM.JK","ASII.JK","BMRI.JK"]
+ihsg_list = [
+"BBRI.JK","BBCA.JK","BMRI.JK","TLKM.JK","ASII.JK",
+"UNVR.JK","ICBP.JK","INDF.JK","ADRO.JK","ANTM.JK"
+]
 
-scan_result = []
+@st.cache_data
+def scan_market():
+    data = yf.download(
+        ihsg_list,
+        period="3mo",
+        interval="1d",
+        group_by="ticker",
+        progress=False
+    )
 
-for s in ihsg_list:
-    try:
-        d = yf.download(s, period="3mo", interval="1d")
-        rsi = ta.momentum.rsi(d['Close']).iloc[-1]
-        scan_result.append([s, rsi])
-    except:
-        pass
+    results = []
 
-scan_df = pd.DataFrame(scan_result, columns=["Ticker","RSI"])
-st.dataframe(scan_df.sort_values("RSI"))
+    for t in ihsg_list:
+        try:
+            d = data[t]
+            rsi = ta.momentum.rsi(d['Close']).iloc[-1]
+
+            score = 0
+            if rsi < 30: score += 1
+            if d['Close'].iloc[-1] > d['Close'].rolling(20).mean().iloc[-1]: score += 1
+
+            results.append([t, round(rsi,2), score])
+        except:
+            pass
+
+    return pd.DataFrame(results, columns=["Ticker","RSI","Score"])
+
+scan_df = scan_market()
+
+if not scan_df.empty:
+    st.dataframe(scan_df.sort_values("Score", ascending=False))
+else:
+    st.warning("Scanner loading...")
