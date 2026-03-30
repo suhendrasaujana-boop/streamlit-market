@@ -128,6 +128,23 @@ if data['Close'].iloc[-1] > data['resistance'].iloc[-2]:
     st.success("🔥 BREAKOUT DETECTED")
 
 # =========================
+# RISK METER (MOVED HERE FOR BETTER FLOW)
+# =========================
+st.subheader("🎯 Risk Meter")
+
+volatility = data['Close'].pct_change().std() * 100
+
+if volatility < 1.5:
+    risk = "LOW"
+    st.success(f"Risk Level : {risk}")
+elif volatility < 3:
+    risk = "MEDIUM"
+    st.warning(f"Risk Level : {risk}")
+else:
+    risk = "HIGH"
+    st.error(f"Risk Level : {risk}")
+
+# =========================
 # SCANNER IHSG
 # =========================
 st.subheader("🔥 TOP MARKET SCANNER")
@@ -153,15 +170,17 @@ def scan_market():
     for t in ihsg_list:
         try:
             d = data[t]
-            rsi = ta.momentum.rsi(d['Close']).iloc[-1]
-            sma20 = d['Close'].rolling(20).mean().iloc[-1]
+            if len(d) > 20:  # Ensure enough data
+                rsi = ta.momentum.rsi(d['Close']).iloc[-1]
+                sma20 = d['Close'].rolling(20).mean().iloc[-1]
 
-            score = 0
-            if rsi < 35: score += 1
-            if d['Close'].iloc[-1] > sma20: score += 1
+                score = 0
+                if rsi < 35: score += 1
+                if d['Close'].iloc[-1] > sma20: score += 1
 
-            rows.append([t, round(rsi,2), score])
-        except:
+                rows.append([t, round(rsi,2), score])
+        except Exception as e:
+            st.write(f"Error loading {t}: {e}")
             pass
 
     return pd.DataFrame(rows, columns=["Ticker","RSI","Score"])
@@ -191,76 +210,6 @@ loss = (data['Close'].pct_change().tail(20) < 0).sum()
 
 st.write("Up Days:", gain)
 st.write("Down Days:", loss)
-
-# =========================
-# FINAL LABEL
-# =========================
-st.header("FINAL DECISION")
-
-if score >= 4:
-    st.success("🟢 ACCUMULATE")
-elif score == 3:
-    st.warning("🟡 WAIT")
-else:
-    st.error("🔴 AVOID")
-    # =========================
-# GLOSSARY
-# =========================
-with st.expander("📖 Glossary (Klik untuk lihat penjelasan)"):
-    st.write("""
-    **RSI** : Indikator overbought / oversold  
-    - RSI < 30 → Oversold (potensi naik)  
-    - RSI > 70 → Overbought (potensi turun)
-
-    **SMA20 / SMA50** : Moving average untuk melihat trend
-    - Harga di atas SMA → Trend naik
-    - Harga di bawah SMA → Trend turun
-
-    **MACD** : Momentum trend
-    - MACD cross up → bullish
-    - MACD cross down → bearish
-
-    **Volume Spike** : Lonjakan volume menandakan minat besar
-
-    **Support** : Area harga bawah tempat harga sering memantul
-
-    **Resistance** : Area harga atas tempat harga sering ditolak
-
-    **Breakout** : Harga menembus resistance → sinyal bullish
-
-    **AI Score** :
-    - 0-2 → Bearish
-    - 3 → Netral
-    - 4-5 → Bullish
-    """)
-
-# =========================
-# DISCLAIMER
-# =========================
-st.markdown("---")
-st.caption("""
-⚠️ DISCLAIMER:
-Dashboard ini hanya untuk edukasi dan analisis teknikal otomatis.
-Bukan merupakan rekomendasi beli atau jual saham.
-Keputusan investasi sepenuhnya tanggung jawab masing-masing.
-Gunakan risk management dan lakukan riset tambahan.
-""")
-# =========================
-# RISK METER
-# =========================
-st.subheader("🎯 Risk Meter")
-
-volatility = data['Close'].pct_change().std() * 100
-
-if volatility < 1.5:
-    risk = "LOW"
-    st.success(f"Risk Level : {risk}")
-elif volatility < 3:
-    risk = "MEDIUM"
-    st.warning(f"Risk Level : {risk}")
-else:
-    risk = "HIGH"
-    st.error(f"Risk Level : {risk}")
 
 # =========================
 # PROBABILITY ENGINE
@@ -354,8 +303,9 @@ elif final_score == 2:
     st.warning("🟡 SPEC BUY")
 else:
     st.error("🔻 WAIT / AVOID")
+
 # =========================
-# GOD MODE ENGINE (FIX)
+# GOD MODE ENGINE
 # =========================
 st.header("🚀 GOD MODE TRADING ENGINE")
 
@@ -391,13 +341,13 @@ st.write(f"Target 2 : {target2:.2f}")
 # =========================
 st.subheader("⚖️ Risk Reward")
 
-risk = entry - stoploss
+risk_amount = entry - stoploss
 reward = target1 - entry
 
-rr = 0  # <-- FIX penting
+rr = 0
 
-if risk > 0:
-    rr = reward / risk
+if risk_amount > 0:
+    rr = reward / risk_amount
     st.write(f"Risk Reward Ratio : 1 : {rr:.2f}")
 
     if rr > 2:
@@ -457,3 +407,58 @@ elif god_score == 2:
     st.warning("⚡ SPEC BUY")
 else:
     st.error("❌ NO TRADE")
+
+# =========================
+# FINAL LABEL
+# =========================
+st.header("FINAL DECISION")
+
+if score >= 4:
+    st.success("🟢 ACCUMULATE")
+elif score == 3:
+    st.warning("🟡 WAIT")
+else:
+    st.error("🔴 AVOID")
+
+# =========================
+# GLOSSARY
+# =========================
+with st.expander("📖 Glossary (Klik untuk lihat penjelasan)"):
+    st.write("""
+    **RSI** : Indikator overbought / oversold  
+    - RSI < 30 → Oversold (potensi naik)  
+    - RSI > 70 → Overbought (potensi turun)
+
+    **SMA20 / SMA50** : Moving average untuk melihat trend
+    - Harga di atas SMA → Trend naik
+    - Harga di bawah SMA → Trend turun
+
+    **MACD** : Momentum trend
+    - MACD cross up → bullish
+    - MACD cross down → bearish
+
+    **Volume Spike** : Lonjakan volume menandakan minat besar
+
+    **Support** : Area harga bawah tempat harga sering memantul
+
+    **Resistance** : Area harga atas tempat harga sering ditolak
+
+    **Breakout** : Harga menembus resistance → sinyal bullish
+
+    **AI Score** :
+    - 0-2 → Bearish
+    - 3 → Netral
+    - 4-5 → Bullish
+    """)
+
+# =========================
+# DISCLAIMER
+# =========================
+st.markdown("---")
+st.caption("""
+⚠️ DISCLAIMER:
+Dashboard ini hanya untuk edukasi dan analisis teknikal otomatis.
+Bukan merupakan rekomendasi beli atau jual saham.
+Keputusan investasi sepenuhnya tanggung jawab masing-masing.
+Gunakan risk management dan lakukan riset tambahan.
+""")
