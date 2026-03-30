@@ -245,3 +245,112 @@ Bukan merupakan rekomendasi beli atau jual saham.
 Keputusan investasi sepenuhnya tanggung jawab masing-masing.
 Gunakan risk management dan lakukan riset tambahan.
 """)
+# =========================
+# RISK METER
+# =========================
+st.subheader("🎯 Risk Meter")
+
+volatility = data['Close'].pct_change().std() * 100
+
+if volatility < 1.5:
+    risk = "LOW"
+    st.success(f"Risk Level : {risk}")
+elif volatility < 3:
+    risk = "MEDIUM"
+    st.warning(f"Risk Level : {risk}")
+else:
+    risk = "HIGH"
+    st.error(f"Risk Level : {risk}")
+
+# =========================
+# PROBABILITY ENGINE
+# =========================
+st.subheader("📊 Probability Engine")
+
+bull = 0
+bear = 0
+
+if data['RSI'].iloc[-1] < 35:
+    bull += 1
+else:
+    bear += 1
+
+if data['Close'].iloc[-1] > data['SMA20'].iloc[-1]:
+    bull += 1
+else:
+    bear += 1
+
+if data['MACD'].iloc[-1] > data['MACD_signal'].iloc[-1]:
+    bull += 1
+else:
+    bear += 1
+
+total = bull + bear
+bull_prob = (bull / total) * 100
+bear_prob = (bear / total) * 100
+
+st.write(f"📈 Bullish Probability : {bull_prob:.1f}%")
+st.write(f"📉 Bearish Probability : {bear_prob:.1f}%")
+
+# =========================
+# MOMENTUM DETECTOR
+# =========================
+st.subheader("🔥 Momentum Detector")
+
+momentum = data['Close'].pct_change(5).iloc[-1] * 100
+
+if momentum > 5:
+    st.success("Strong Up Momentum")
+elif momentum > 2:
+    st.info("Moderate Up Momentum")
+elif momentum < -5:
+    st.error("Strong Down Momentum")
+else:
+    st.warning("Sideways")
+
+# =========================
+# VOLUME SPIKE ALERT
+# =========================
+st.subheader("🚨 Volume Alert")
+
+if data['Volume'].iloc[-1] > data['Volume_MA'].iloc[-1] * 1.8:
+    st.success("Volume Spike Detected")
+else:
+    st.write("Normal Volume")
+
+# =========================
+# TREND STRENGTH
+# =========================
+st.subheader("📈 Trend Strength")
+
+trend_strength = abs(data['SMA20'].iloc[-1] - data['SMA50'].iloc[-1])
+
+if trend_strength > data['Close'].iloc[-1] * 0.05:
+    st.success("Strong Trend")
+elif trend_strength > data['Close'].iloc[-1] * 0.02:
+    st.info("Moderate Trend")
+else:
+    st.warning("Weak Trend")
+
+# =========================
+# AI FINAL DECISION PRO
+# =========================
+st.header("🧠 AI FINAL PRO")
+
+final_score = 0
+
+if bull_prob > 60:
+    final_score += 1
+if risk == "LOW":
+    final_score += 1
+if momentum > 2:
+    final_score += 1
+if data['Volume'].iloc[-1] > data['Volume_MA'].iloc[-1]:
+    final_score += 1
+
+if final_score >= 3:
+    st.success("🚀 STRONG ACCUMULATE")
+elif final_score == 2:
+    st.warning("🟡 SPEC BUY")
+else:
+    st.error("🔻 WAIT / AVOID")
