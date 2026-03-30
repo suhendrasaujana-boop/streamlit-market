@@ -354,3 +354,107 @@ elif final_score == 2:
     st.warning("🟡 SPEC BUY")
 else:
     st.error("🔻 WAIT / AVOID")
+# =========================
+# GOD MODE ENGINE
+# =========================
+st.header("🚀 GOD MODE TRADING ENGINE")
+
+price = data['Close'].iloc[-1]
+support = data['support'].iloc[-1]
+resistance = data['resistance'].iloc[-1]
+
+# =========================
+# SMART ENTRY
+# =========================
+st.subheader("🎯 Smart Entry")
+
+entry = (support + price) / 2
+st.write(f"Suggested Entry : {entry:.2f}")
+
+# =========================
+# STOPLOSS
+# =========================
+st.subheader("🛑 Stoploss")
+
+stoploss = support * 0.97
+st.write(f"Stoploss : {stoploss:.2f}")
+
+# =========================
+# TARGET PROFIT
+# =========================
+st.subheader("💰 Target Profit")
+
+target1 = resistance
+target2 = resistance * 1.05
+
+st.write(f"Target 1 : {target1:.2f}")
+st.write(f"Target 2 : {target2:.2f}")
+
+# =========================
+# RISK REWARD
+# =========================
+st.subheader("⚖️ Risk Reward")
+
+risk = entry - stoploss
+reward = target1 - entry
+
+if risk > 0:
+    rr = reward / risk
+    st.write(f"Risk Reward Ratio : 1 : {rr:.2f}")
+
+    if rr > 2:
+        st.success("Good Trade Setup")
+    elif rr > 1:
+        st.warning("Moderate Setup")
+    else:
+        st.error("Bad Setup")
+
+# =========================
+# TREND SCORE
+# =========================
+st.subheader("📈 Trend Score")
+
+trend_score = 0
+
+if data['Close'].iloc[-1] > data['SMA20'].iloc[-1]:
+    trend_score += 1
+if data['SMA20'].iloc[-1] > data['SMA50'].iloc[-1]:
+    trend_score += 1
+if data['RSI'].iloc[-1] > 50:
+    trend_score += 1
+
+st.write(f"Trend Score : {trend_score}/3")
+
+# =========================
+# BREAKOUT STRENGTH
+# =========================
+st.subheader("🔥 Breakout Strength")
+
+if price > resistance:
+    strength = (price - resistance) / resistance * 100
+    st.success(f"Breakout Strength : {strength:.2f}%")
+else:
+    st.write("No Breakout")
+
+# =========================
+# FINAL GOD SIGNAL
+# =========================
+st.header("🧠 FINAL GOD SIGNAL")
+
+god_score = 0
+
+if rr > 2:
+    god_score += 1
+if trend_score >= 2:
+    god_score += 1
+if data['RSI'].iloc[-1] < 70:
+    god_score += 1
+if price > data['SMA20'].iloc[-1]:
+    god_score += 1
+
+if god_score >= 3:
+    st.success("🚀 GOD MODE BUY")
+elif god_score == 2:
+    st.warning("⚡ SPEC BUY")
+else:
+    st.error("❌ NO TRADE")
