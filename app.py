@@ -12,7 +12,8 @@ st.title("🚀 SMART MARKET DASHBOARD — ALL IN ONE FINAL")
 # INPUT
 # =========================
 col1, col2 = st.columns(2)
-ticker = col1.text_input("Ticker", "BBRI.JK")
+# ✅ SUDAH DIUBAH: Default ticker sekarang adalah ^JKSE (IHSG/IDX Composite)
+ticker = col1.text_input("Ticker", "^JKSE")
 timeframe = col2.selectbox("Timeframe", ["1d","1wk","1mo"])
 
 # =========================
@@ -20,9 +21,17 @@ timeframe = col2.selectbox("Timeframe", ["1d","1wk","1mo"])
 # =========================
 @st.cache_data
 def load_data(ticker, timeframe):
+    # Download data
     df = yf.download(ticker, period="1y", interval=timeframe, progress=False)
+    
+    # Perbaikan khusus untuk Index (^JKSE, ^HSI, dll)
+    if df.empty:
+        df = yf.download(ticker, period="1y", interval=timeframe, progress=False, auto_adjust=False)
+    
+    # Rapikan columns (untuk multi-level columns)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+    
     return df
 
 data = load_data(ticker, timeframe)
