@@ -203,3 +203,45 @@ elif score == 3:
     st.warning("🟡 WAIT")
 else:
     st.error("🔴 AVOID")
+    # =========================
+# GLOSSARY
+# =========================
+with st.expander("📖 Glossary (Klik untuk lihat penjelasan)"):
+    st.write("""
+    **RSI** : Indikator overbought / oversold  
+    - RSI < 30 → Oversold (potensi naik)  
+    - RSI > 70 → Overbought (potensi turun)
+
+    **SMA20 / SMA50** : Moving average untuk melihat trend
+    - Harga di atas SMA → Trend naik
+    - Harga di bawah SMA → Trend turun
+
+    **MACD** : Momentum trend
+    - MACD cross up → bullish
+    - MACD cross down → bearish
+
+    **Volume Spike** : Lonjakan volume menandakan minat besar
+
+    **Support** : Area harga bawah tempat harga sering memantul
+
+    **Resistance** : Area harga atas tempat harga sering ditolak
+
+    **Breakout** : Harga menembus resistance → sinyal bullish
+
+    **AI Score** :
+    - 0-2 → Bearish
+    - 3 → Netral
+    - 4-5 → Bullish
+    """)
+
+# =========================
+# DISCLAIMER
+# =========================
+st.markdown("---")
+st.caption("""
+⚠️ DISCLAIMER:
+Dashboard ini hanya untuk edukasi dan analisis teknikal otomatis.
+Bukan merupakan rekomendasi beli atau jual saham.
+Keputusan investasi sepenuhnya tanggung jawab masing-masing.
+Gunakan risk management dan lakukan riset tambahan.
+""")
