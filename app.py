@@ -355,7 +355,7 @@ elif final_score == 2:
 else:
     st.error("🔻 WAIT / AVOID")
 # =========================
-# GOD MODE ENGINE
+# GOD MODE ENGINE (FIX)
 # =========================
 st.header("🚀 GOD MODE TRADING ENGINE")
 
@@ -367,7 +367,6 @@ resistance = data['resistance'].iloc[-1]
 # SMART ENTRY
 # =========================
 st.subheader("🎯 Smart Entry")
-
 entry = (support + price) / 2
 st.write(f"Suggested Entry : {entry:.2f}")
 
@@ -375,7 +374,6 @@ st.write(f"Suggested Entry : {entry:.2f}")
 # STOPLOSS
 # =========================
 st.subheader("🛑 Stoploss")
-
 stoploss = support * 0.97
 st.write(f"Stoploss : {stoploss:.2f}")
 
@@ -383,10 +381,8 @@ st.write(f"Stoploss : {stoploss:.2f}")
 # TARGET PROFIT
 # =========================
 st.subheader("💰 Target Profit")
-
 target1 = resistance
 target2 = resistance * 1.05
-
 st.write(f"Target 1 : {target1:.2f}")
 st.write(f"Target 2 : {target2:.2f}")
 
@@ -398,6 +394,8 @@ st.subheader("⚖️ Risk Reward")
 risk = entry - stoploss
 reward = target1 - entry
 
+rr = 0  # <-- FIX penting
+
 if risk > 0:
     rr = reward / risk
     st.write(f"Risk Reward Ratio : 1 : {rr:.2f}")
@@ -408,6 +406,8 @@ if risk > 0:
         st.warning("Moderate Setup")
     else:
         st.error("Bad Setup")
+else:
+    st.warning("Risk tidak valid")
 
 # =========================
 # TREND SCORE
@@ -415,8 +415,7 @@ if risk > 0:
 st.subheader("📈 Trend Score")
 
 trend_score = 0
-
-if data['Close'].iloc[-1] > data['SMA20'].iloc[-1]:
+if price > data['SMA20'].iloc[-1]:
     trend_score += 1
 if data['SMA20'].iloc[-1] > data['SMA50'].iloc[-1]:
     trend_score += 1
