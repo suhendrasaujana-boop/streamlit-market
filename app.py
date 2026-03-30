@@ -4,10 +4,8 @@ import pandas as pd
 import numpy as np
 import ta
 import plotly.graph_objects as go
-from datetime import datetime
 
 st.set_page_config(layout="wide")
-
 st.title("📊 Smart Market Dashboard Ultimate")
 
 # =========================
@@ -20,13 +18,22 @@ ticker = st.text_input("Ticker", "BBRI.JK")
 # =========================
 data = yf.download(ticker, period="1y", interval="1d")
 
+# FIX yfinance multiindex
+if isinstance(data.columns, pd.MultiIndex):
+    data.columns = data.columns.get_level_values(0)
+
+data = data.astype(float)
+
 # =========================
 # TECHNICAL
 # =========================
-data['SMA20'] = ta.trend.sma_indicator(data['Close'], window=20)
-data['SMA50'] = ta.trend.sma_indicator(data['Close'], window=50)
-data['RSI'] = ta.momentum.rsi(data['Close'], window=14)
-macd = ta.trend.MACD(data['Close'])
+close = data['Close']
+
+data['SMA20'] = ta.trend.sma_indicator(close, window=20)
+data['SMA50'] = ta.trend.sma_indicator(close, window=50)
+data['RSI'] = ta.momentum.rsi(close, window=14)
+
+macd = ta.trend.MACD(close)
 data['MACD'] = macd.macd()
 data['MACD_signal'] = macd.macd_signal()
 
@@ -44,17 +51,8 @@ fig.add_trace(go.Candlestick(
     name="Price"
 ))
 
-fig.add_trace(go.Scatter(
-    x=data.index,
-    y=data['SMA20'],
-    name="SMA20"
-))
-
-fig.add_trace(go.Scatter(
-    x=data.index,
-    y=data['SMA50'],
-    name="SMA50"
-))
+fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], name="SMA20"))
+fig.add_trace(go.Scatter(x=data.index, y=data['SMA50'], name="SMA50"))
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -88,12 +86,14 @@ col4.metric("ROE", info.get("returnOnEquity"))
 # =========================
 st.subheader("Latest News")
 
-news = yf.Ticker(ticker).news
-
-for n in news[:5]:
-    st.write(f"### {n['title']}")
-    st.write(n['publisher'])
-    st.write(n['link'])
+try:
+    news = yf.Ticker(ticker).news
+    for n in news[:5]:
+        st.write(f"### {n['title']}")
+        st.write(n['publisher'])
+        st.write(n['link'])
+except:
+    st.write("No news available")
 
 # =========================
 # SIGNAL
