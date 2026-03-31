@@ -41,11 +41,20 @@ def login_user(email, password):
 
 def register_user(email, password):
     try:
-        supabase.auth.sign_up({"email": email, "password": password})
-        st.success("Pendaftaran berhasil! Silakan cek email Anda untuk verifikasi (cek juga folder spam). Setelah verifikasi, login kembali.")
+        response = supabase.auth.sign_up({
+            "email": email,
+            "password": password,
+            "options": {
+                "email_redirect_to": "https://smart-market-dashboard.streamlit.app"
+            }
+        })
+        if response.user:
+            st.success("Pendaftaran berhasil! Silakan cek email untuk verifikasi.")
+        else:
+            st.error("Pendaftaran gagal, coba lagi.")
         return True
-    except Exception:
-        st.error("Email sudah terdaftar atau terjadi kesalahan.")
+    except Exception as e:
+        st.error(f"Error detail: {str(e)}")
         return False
 
 def logout_user():
