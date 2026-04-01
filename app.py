@@ -4,7 +4,23 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 import numpy as np
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+import time
+from typing import Dict, List, Optional, Tuple, Any
+
+# ========== KONSTANTA ==========
+TIMEFRAMES = {"1d": "1d", "1wk": "1wk", "1mo": "1mo"}
+DEFAULT_TICKER = "^JKSE"
+CACHE_TTL = 600  # 10 menit
+SCANNER_CACHE_TTL = 1800  # 30 menit
+IHSG_BLUE_CHIPS = [
+    "BBRI.JK", "BBCA.JK", "BMRI.JK", "TLKM.JK", "ASII.JK",
+    "ADRO.JK", "ANTM.JK", "MDKA.JK", "UNTR.JK", "ICBP.JK",
+    "INDF.JK", "UNVR.JK", "SMGR.JK", "CPIN.JK", "JPFA.JK"
+]
+VOLUME_SPIKE_THRESHOLD = 1.8
+BREAKOUT_COOLDOWN_HOURS = 24
+VOLUME_SPIKE_COOLDOWN_HOURS = 6
 
 # ========== KONFIGURASI HALAMAN ==========
 st.set_page_config(layout="wide", page_title="Smart Market Dashboard", page_icon="📊")
@@ -12,24 +28,55 @@ st.set_page_config(layout="wide", page_title="Smart Market Dashboard", page_icon
 # ========== SESSION STATE ==========
 if 'last_resistance' not in st.session_state:
     st.session_state.last_resistance = None
+if 'last_breakout_notify_time' not in st.session_state:
+    st.session_state.last_breakout_notify_time = None
 if 'last_volume_ratio' not in st.session_state:
     st.session_state.last_volume_ratio = 0
+if 'last_volume_notify_time' not in st.session_state:
+    st.session_state.last_volume_notify_time = None
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = []  # list of dict: ticker, entry_date, entry_price, shares
 
 # ========== FUNGSI BANTU ==========
-def safe_sma(series, window):
-    if len(series) < window:
-        return series.rolling(window, min_periods=1).mean()
-    return ta.trend.sma_indicator(series, window=window)
+def safe_sma(series: pd.Series, window: int) -> pd.Series:
+    """Hitung SMA dengan minimal data cukup"""
+    return series.rolling(window, min_periods=1).mean()
 
-def fix_ticker(ticker):
+def fix_ticker(ticker: str) -> str:
+    """Bakukan format ticker untuk indeks dan saham lokal"""
     ticker = ticker.strip().upper()
     if ticker.startswith('^') or ticker.endswith('.JK'):
         return ticker
     return ticker + '.JK'
 
-def get_fundamental_details(ticker):
+def should_notify_breakout(current_price: float, resistance: float) -> bool:
+    """Cek apakah perlu notifikasi breakout dengan cooldown"""
+    if current_price <= resistance:
+        return False
+    if st.session_state.last_resistance is None:
+        return True
+    # Notifikasi jika resistance naik (breakout level baru) atau sudah lewat cooldown
+    if resistance > st.session_state.last_resistance:
+        return True
+    if st.session_state.last_breakout_notify_time is None:
+        return True
+    cooldown = timedelta(hours=BREAKOUT_COOLDOWN_HOURS)
+    if datetime.now() - st.session_state.last_breakout_notify_time > cooldown:
+        return True
+    return False
+
+def should_notify_volume_spike(volume_ratio: float) -> bool:
+    """Cek apakah perlu notifikasi volume spike dengan cooldown"""
+    if volume_ratio <= VOLUME_SPIKE_THRESHOLD:
+        return False
+    if st.session_state.last_volume_notify_time is None:
+        return True
+    cooldown = timedelta(hours=VOLUME_SPIKE_COOLDOWN_HOURS)
+    if datetime.now() - st.session_state.last_volume_notify_time > cooldown:
+        return True
+    return False
+
+def get_fundamental_details(ticker: str) -> Dict[str, Any]:
     """Ambil data fundamental lebih lengkap dari yfinance"""
     try:
         obj = yf.Ticker(ticker)
@@ -47,8 +94,142 @@ def get_fundamental_details(ticker):
             'revenue_growth': info.get('revenueGrowth'),
             'earnings_growth': info.get('earningsGrowth'),
         }
-    except:
+    except Exception:
         return {}
+
+@st.cache_data(ttl=CACHE_TTL)
+def load_data(ticker: str, timeframe: str) -> pd.DataFrame:
+    """Muat data harga dan volume dari Yahoo Finance dengan caching"""
+    try:
+        df = yf.download(ticker, period="2y", interval=timeframe, progress=False, auto_adjust=False)
+        if df.empty:
+            df = yf.download(ticker, period="1y", interval=timeframe, progress=False, auto_adjust=False)
+        if df.empty:
+            return pd.DataFrame()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df.dropna(how='all')
+        if 'Volume' in df.columns:
+            df['Volume'] = df['Volume'].fillna(0)
+        return df
+    except Exception as e:
+        st.error(f"Error loading data for {ticker}: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=SCANNER_CACHE_TTL)
+def scan_market_fast(tickers: List[str]) -> pd.DataFrame:
+    """Pindai saham dengan download batch"""
+    try:
+        all_data = yf.download(tickers, period="6mo", interval="1d", group_by="ticker", progress=False, threads=True, auto_adjust=False)
+        rows = []
+        for ticker in tickers:
+            try:
+                if ticker not in all_data.columns.levels[0]:
+                    continue
+                df = all_data[ticker].dropna()
+                if len(df) < 20:
+                    continue
+                close = df['Close']
+                rsi = ta.momentum.rsi(close, window=14).iloc[-1] if len(close) >= 14 else 50
+                sma20 = close.rolling(20).mean().iloc[-1]
+                if pd.isna(sma20):
+                    sma20 = close.iloc[-1]
+                score_val = (1 if rsi < 35 else 0) + (1 if close.iloc[-1] > sma20 else 0)
+                rows.append([ticker, round(rsi, 2), score_val])
+            except Exception:
+                continue
+        return pd.DataFrame(rows, columns=["Ticker", "RSI", "Score"])
+    except Exception as e:
+        st.error(f"Scanner error: {e}")
+        return pd.DataFrame()
+
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Tambahkan indikator teknis ke dataframe"""
+    if df.empty:
+        return df
+    close = df['Close']
+    volume = df['Volume'] if 'Volume' in df.columns else pd.Series(0, index=df.index)
+
+    df['SMA20'] = safe_sma(close, 20)
+    df['SMA50'] = safe_sma(close, 50)
+
+    if len(df) >= 14:
+        df['RSI'] = ta.momentum.rsi(close, window=14)
+    else:
+        df['RSI'] = 50.0
+
+    if len(df) >= 26:
+        macd = ta.trend.MACD(close)
+        df['MACD'] = macd.macd()
+        df['MACD_signal'] = macd.macd_signal()
+    else:
+        df['MACD'] = 0.0
+        df['MACD_signal'] = 0.0
+
+    if volume.sum() > 0:
+        df['Volume_MA'] = volume.rolling(20, min_periods=1).mean()
+    else:
+        df['Volume_MA'] = 0.0
+
+    df['support'] = df['Low'].rolling(20, min_periods=1).min()
+    df['resistance'] = df['High'].rolling(20, min_periods=1).max()
+
+    # AD & CMF
+    try:
+        df['AD'] = ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume'], fillna=True)
+    except Exception:
+        df['AD'] = 0.0
+    try:
+        df['CMF'] = ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20, fillna=True)
+    except Exception:
+        df['CMF'] = 0.0
+
+    # Bollinger Bands (tambahan)
+    if len(df) >= 20:
+        bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
+        df['BB_upper'] = bb.bollinger_hband()
+        df['BB_middle'] = bb.bollinger_mavg()
+        df['BB_lower'] = bb.bollinger_lband()
+    else:
+        df['BB_upper'] = np.nan
+        df['BB_middle'] = np.nan
+        df['BB_lower'] = np.nan
+
+    df = df.ffill().fillna(0)
+    return df
+
+def calculate_ai_score(df: pd.DataFrame, volume: pd.Series) -> int:
+    """Hitung AI score berdasarkan kondisi teknis"""
+    if df.empty:
+        return 0
+    conditions = [
+        df['RSI'].iloc[-1] < 35,
+        df['Close'].iloc[-1] > df['SMA20'].iloc[-1],
+        df['SMA20'].iloc[-1] > df['SMA50'].iloc[-1],
+        df['MACD'].iloc[-1] > df['MACD_signal'].iloc[-1],
+        volume.iloc[-1] > df['Volume_MA'].iloc[-1] if volume.sum() > 0 else False
+    ]
+    return sum(conditions)
+
+def get_portfolio_current_prices(tickers: List[str]) -> Dict[str, Optional[float]]:
+    """Ambil harga terkini untuk semua ticker portofolio secara batch"""
+    if not tickers:
+        return {}
+    try:
+        data = yf.download(tickers, period="1d", group_by='ticker', progress=False, auto_adjust=False)
+        prices = {}
+        for tick in tickers:
+            try:
+                if tick in data.columns.levels[0]:
+                    prices[tick] = data[tick]['Close'].iloc[-1]
+                else:
+                    prices[tick] = None
+            except Exception:
+                prices[tick] = None
+        return prices
+    except Exception as e:
+        st.error(f"Error fetching portfolio prices: {e}")
+        return {t: None for t in tickers}
 
 # ========== SIDEBAR ==========
 with st.sidebar:
@@ -56,14 +237,14 @@ with st.sidebar:
     
     ticker_input = st.text_input(
         "Ticker",
-        "^JKSE",
+        DEFAULT_TICKER,
         help="Contoh: BBCA, BBRI, ASII, atau ^JKSE untuk IHSG."
     )
     ticker = fix_ticker(ticker_input)
     if ticker != ticker_input:
         st.info(f"Format: {ticker}")
     
-    timeframe = st.selectbox("Timeframe", ["1d","1wk","1mo"])
+    timeframe = st.selectbox("Timeframe", list(TIMEFRAMES.keys()))
     
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
@@ -73,81 +254,35 @@ with st.sidebar:
     st.caption("Data dari Yahoo Finance | Update 10 menit")
 
 # ========== LOAD DATA ==========
-@st.cache_data(ttl=600)
-def load_data(ticker, timeframe):
-    df = yf.download(ticker, period="2y", interval=timeframe, progress=False)
-    if df.empty:
-        df = yf.download(ticker, period="1y", interval=timeframe, progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df = df.dropna(how='all')
-    if 'Volume' in df.columns:
-        df['Volume'] = df['Volume'].fillna(0)
-    return df
-
-data = load_data(ticker, timeframe)
+with st.spinner("Memuat data..."):
+    data = load_data(ticker, TIMEFRAMES[timeframe])
 
 if data.empty or len(data) < 5:
     st.warning(f"Data tidak cukup untuk {ticker} (minimal 5 periode).")
     st.stop()
 
-# ========== INDIKATOR TEKNIS ==========
-close = data['Close']
-volume = data['Volume'] if 'Volume' in data.columns else pd.Series(0, index=data.index)
+# ========== TAMBAHKAN INDIKATOR ==========
+data = add_indicators(data)
 
-data['SMA20'] = safe_sma(close, min(20, len(data)-1))
-data['SMA50'] = safe_sma(close, min(50, len(data)-1))
-
-if len(data) >= 14:
-    data['RSI'] = ta.momentum.rsi(close, window=14)
-else:
-    data['RSI'] = 50.0
-
-if len(data) >= 26:
-    macd = ta.trend.MACD(close)
-    data['MACD'] = macd.macd()
-    data['MACD_signal'] = macd.macd_signal()
-else:
-    data['MACD'] = 0.0
-    data['MACD_signal'] = 0.0
-
-if volume.sum() > 0:
-    data['Volume_MA'] = volume.rolling(20, min_periods=1).mean()
-else:
-    data['Volume_MA'] = 0.0
-
-data['support'] = data['Low'].rolling(20, min_periods=1).min()
-data['resistance'] = data['High'].rolling(20, min_periods=1).max()
-
-# AD & CMF
-try:
-    data['AD'] = ta.volume.acc_dist_index(data['High'], data['Low'], data['Close'], data['Volume'], fillna=True)
-except:
-    data['AD'] = 0.0
-try:
-    data['CMF'] = ta.volume.chaikin_money_flow(data['High'], data['Low'], data['Close'], data['Volume'], window=20, fillna=True)
-except:
-    data['CMF'] = 0.0
-
-data = data.ffill().fillna(0)
-
-# ========== NOTIFIKASI BREAKOUT ==========
+# ========== NOTIFIKASI BREAKOUT & VOLUME ==========
 if not data.empty:
     current_resistance = data['resistance'].iloc[-1]
     current_price = data['Close'].iloc[-1]
-    if st.session_state.last_resistance is None:
-        st.session_state.last_resistance = current_resistance
-    if current_price > current_resistance and current_resistance != st.session_state.last_resistance:
+    if should_notify_breakout(current_price, current_resistance):
         st.toast(f"🚀 BREAKOUT! Harga menembus resistance {current_resistance:.2f}", icon="🚀")
         st.session_state.last_resistance = current_resistance
+        st.session_state.last_breakout_notify_time = datetime.now()
+    
+    volume = data['Volume'] if 'Volume' in data.columns else pd.Series(0, index=data.index)
     if volume.sum() > 0:
         vol_last = volume.iloc[-1]
         vol_ma = data['Volume_MA'].iloc[-1]
         if vol_ma > 0:
             volume_ratio = vol_last / vol_ma
-            if volume_ratio > 1.8 and volume_ratio != st.session_state.last_volume_ratio:
+            if should_notify_volume_spike(volume_ratio):
                 st.toast(f"🔥 Volume Spike! {volume_ratio:.1f}x", icon="⚠️")
                 st.session_state.last_volume_ratio = volume_ratio
+                st.session_state.last_volume_notify_time = datetime.now()
 
 # ========== HEADER HARGA ==========
 st.title(f"📈 {ticker}")
@@ -190,6 +325,9 @@ with tab1:
     fig.add_trace(go.Scatter(x=data.index, y=data['SMA50'], name="SMA50"))
     fig.add_trace(go.Scatter(x=data.index, y=data['support'], name="Support", line=dict(dash='dash')))
     fig.add_trace(go.Scatter(x=data.index, y=data['resistance'], name="Resistance", line=dict(dash='dash')))
+    if 'BB_upper' in data.columns and not data['BB_upper'].isnull().all():
+        fig.add_trace(go.Scatter(x=data.index, y=data['BB_upper'], name="BB Upper", line=dict(dash='dot')))
+        fig.add_trace(go.Scatter(x=data.index, y=data['BB_lower'], name="BB Lower", line=dict(dash='dot')))
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Volume")
@@ -218,15 +356,7 @@ with tab1:
 # ========== TAB 2: AI SIGNAL & RISK ==========
 with tab2:
     # AI Score
-    score = 0
-    try:
-        if pd.notna(data['RSI'].iloc[-1]) and data['RSI'].iloc[-1] < 35: score += 1
-        if pd.notna(data['Close'].iloc[-1]) and pd.notna(data['SMA20'].iloc[-1]) and data['Close'].iloc[-1] > data['SMA20'].iloc[-1]: score += 1
-        if pd.notna(data['SMA20'].iloc[-1]) and pd.notna(data['SMA50'].iloc[-1]) and data['SMA20'].iloc[-1] > data['SMA50'].iloc[-1]: score += 1
-        if pd.notna(data['MACD'].iloc[-1]) and pd.notna(data['MACD_signal'].iloc[-1]) and data['MACD'].iloc[-1] > data['MACD_signal'].iloc[-1]: score += 1
-        if volume.sum() > 0 and pd.notna(volume.iloc[-1]) and pd.notna(data['Volume_MA'].iloc[-1]) and volume.iloc[-1] > data['Volume_MA'].iloc[-1]: score += 1
-    except:
-        pass
+    score = calculate_ai_score(data, volume)
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -241,16 +371,21 @@ with tab2:
     with col_b:
         st.subheader("🎯 Risk Meter")
         returns = data['Close'].pct_change().dropna()
-        volatility = returns.std() * 100 if len(returns) > 0 else 0
-        if volatility < 1.5:
+        if len(returns) > 0:
+            # Volatilitas tahunan (dalam persen)
+            daily_vol = returns.std()
+            annual_vol = daily_vol * np.sqrt(252) * 100
+        else:
+            annual_vol = 0.0
+        if annual_vol < 15:
             risk = "LOW"
-            st.success(f"Risk Level: {risk}")
-        elif volatility < 3:
+            st.success(f"Risk Level: {risk} ({annual_vol:.1f}% annual)")
+        elif annual_vol < 30:
             risk = "MEDIUM"
-            st.warning(f"Risk Level: {risk}")
+            st.warning(f"Risk Level: {risk} ({annual_vol:.1f}% annual)")
         else:
             risk = "HIGH"
-            st.error(f"Risk Level: {risk}")
+            st.error(f"Risk Level: {risk} ({annual_vol:.1f}% annual)")
 
     # Probability
     st.subheader("📊 Probability Engine")
@@ -302,7 +437,7 @@ with tab2:
     with col_vol:
         st.subheader("🚨 Volume Alert")
         if volume.sum() > 0:
-            if volume.iloc[-1] > data['Volume_MA'].iloc[-1] * 1.8:
+            if volume.iloc[-1] > data['Volume_MA'].iloc[-1] * VOLUME_SPIKE_THRESHOLD:
                 st.success("Volume Spike Detected")
             else:
                 st.write("Normal Volume")
@@ -402,36 +537,8 @@ with tab2:
 with tab3:
     st.subheader("🔥 SUPER FAST IHSG SCANNER (15 Blue Chip)")
 
-    full_ihsg_list = [
-        "BBRI.JK","BBCA.JK","BMRI.JK","TLKM.JK","ASII.JK",
-        "ADRO.JK","ANTM.JK","MDKA.JK","UNTR.JK","ICBP.JK",
-        "INDF.JK","UNVR.JK","SMGR.JK","CPIN.JK","JPFA.JK"
-    ]
-
-    @st.cache_data(ttl=1800)
-    def scan_market_fast(tickers):
-        all_data = yf.download(tickers, period="6mo", interval="1d", group_by="ticker", progress=False, threads=True)
-        rows = []
-        for ticker in tickers:
-            try:
-                if ticker not in all_data.columns.levels[0]:
-                    continue
-                df = all_data[ticker].dropna()
-                if len(df) < 20:
-                    continue
-                close = df['Close']
-                rsi = ta.momentum.rsi(close, window=14).iloc[-1] if len(close) >= 14 else 50
-                sma20 = close.rolling(20).mean().iloc[-1]
-                if pd.isna(sma20):
-                    sma20 = close.iloc[-1]
-                score_val = (1 if rsi < 35 else 0) + (1 if close.iloc[-1] > sma20 else 0)
-                rows.append([ticker, round(rsi, 2), score_val])
-            except Exception:
-                continue
-        return pd.DataFrame(rows, columns=["Ticker", "RSI", "Score"])
-
     with st.spinner("Memindai 15 saham..."):
-        scan_df = scan_market_fast(full_ihsg_list)
+        scan_df = scan_market_fast(IHSG_BLUE_CHIPS)
 
     if not scan_df.empty:
         st.dataframe(scan_df.sort_values("Score", ascending=False), use_container_width=True)
@@ -476,17 +583,9 @@ with tab4:
     # Tampilkan portofolio
     if st.session_state.portfolio:
         portfolio_df = pd.DataFrame(st.session_state.portfolio)
-        # Ambil harga terbaru untuk setiap ticker
-        current_prices = {}
-        for tick in portfolio_df['ticker'].unique():
-            try:
-                tick_data = yf.download(tick, period="1d", progress=False)
-                if not tick_data.empty:
-                    current_prices[tick] = tick_data['Close'].iloc[-1]
-                else:
-                    current_prices[tick] = None
-            except:
-                current_prices[tick] = None
+        # Ambil harga terbaru untuk semua ticker sekaligus
+        unique_tickers = portfolio_df['ticker'].unique().tolist()
+        current_prices = get_portfolio_current_prices(unique_tickers)
         
         portfolio_df['current_price'] = portfolio_df['ticker'].map(current_prices)
         portfolio_df['unrealized_pnl'] = (portfolio_df['current_price'] - portfolio_df['entry_price']) * portfolio_df['shares']
