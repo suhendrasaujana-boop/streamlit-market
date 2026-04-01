@@ -4,7 +4,7 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 import numpy as np
-from datetime import datetime
+from datetime import datetime, date
 
 # ========== KONFIGURASI HALAMAN ==========
 st.set_page_config(layout="wide", page_title="Smart Market Dashboard", page_icon="📊")
@@ -14,6 +14,8 @@ if 'last_resistance' not in st.session_state:
     st.session_state.last_resistance = None
 if 'last_volume_ratio' not in st.session_state:
     st.session_state.last_volume_ratio = 0
+if 'portfolio' not in st.session_state:
+    st.session_state.portfolio = []  # list of dict: ticker, entry_date, entry_price, shares
 
 # ========== FUNGSI BANTU ==========
 def safe_sma(series, window):
@@ -22,11 +24,31 @@ def safe_sma(series, window):
     return ta.trend.sma_indicator(series, window=window)
 
 def fix_ticker(ticker):
-    """Otomatis tambahkan .JK jika diperlukan (kecuali indeks)"""
     ticker = ticker.strip().upper()
     if ticker.startswith('^') or ticker.endswith('.JK'):
         return ticker
     return ticker + '.JK'
+
+def get_fundamental_details(ticker):
+    """Ambil data fundamental lebih lengkap dari yfinance"""
+    try:
+        obj = yf.Ticker(ticker)
+        info = obj.info
+        return {
+            'pe': info.get('trailingPE'),
+            'pb': info.get('priceToBook'),
+            'div_yield': info.get('dividendYield'),
+            'market_cap': info.get('marketCap'),
+            'sector': info.get('sector'),
+            'roa': info.get('returnOnAssets'),
+            'roe': info.get('returnOnEquity'),
+            'debt_to_equity': info.get('debtToEquity'),
+            'profit_margin': info.get('profitMargins'),
+            'revenue_growth': info.get('revenueGrowth'),
+            'earnings_growth': info.get('earningsGrowth'),
+        }
+    except:
+        return {}
 
 # ========== SIDEBAR ==========
 with st.sidebar:
@@ -35,20 +57,20 @@ with st.sidebar:
     ticker_input = st.text_input(
         "Ticker",
         "^JKSE",
-        help="Contoh: BBCA, BBRI, ASII, atau ^JKSE untuk IHSG. Anda boleh ketik tanpa .JK, akan otomatis ditambahkan."
+        help="Contoh: BBCA, BBRI, ASII, atau ^JKSE untuk IHSG."
     )
     ticker = fix_ticker(ticker_input)
     if ticker != ticker_input:
-        st.info(f"Format ticker disesuaikan menjadi: {ticker}")
+        st.info(f"Format: {ticker}")
     
-    timeframe = st.selectbox("Timeframe", ["1d","1wk","1mo"], help="1d = harian, 1wk = mingguan, 1mo = bulanan")
+    timeframe = st.selectbox("Timeframe", ["1d","1wk","1mo"])
     
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
     
     st.markdown("---")
-    st.caption("Data dari Yahoo Finance | Update otomatis setiap 10 menit")
+    st.caption("Data dari Yahoo Finance | Update 10 menit")
 
 # ========== LOAD DATA ==========
 @st.cache_data(ttl=600)
@@ -63,37 +85,16 @@ def load_data(ticker, timeframe):
         df['Volume'] = df['Volume'].fillna(0)
     return df
 
-@st.cache_data(ttl=600)
-def get_fundamental(ticker):
-    """Ambil info fundamental dari yfinance"""
-    try:
-        obj = yf.Ticker(ticker)
-        info = obj.info
-        return {
-            'pe': info.get('trailingPE', None),
-            'pb': info.get('priceToBook', None),
-            'div_yield': info.get('dividendYield', None),
-            'market_cap': info.get('marketCap', None),
-            'sector': info.get('sector', None)
-        }
-    except:
-        return {}
-
 data = load_data(ticker, timeframe)
 
 if data.empty or len(data) < 5:
     st.warning(f"Data tidak cukup untuk {ticker} (minimal 5 periode).")
     st.stop()
 
-if not ticker.startswith('^'):
-    fundamental = get_fundamental(ticker)
-else:
-    fundamental = {}
-
+# ========== INDIKATOR TEKNIS ==========
 close = data['Close']
 volume = data['Volume'] if 'Volume' in data.columns else pd.Series(0, index=data.index)
 
-# ========== INDIKATOR TEKNIS ==========
 data['SMA20'] = safe_sma(close, min(20, len(data)-1))
 data['SMA50'] = safe_sma(close, min(50, len(data)-1))
 
@@ -118,42 +119,37 @@ else:
 data['support'] = data['Low'].rolling(20, min_periods=1).min()
 data['resistance'] = data['High'].rolling(20, min_periods=1).max()
 
-# Akumulasi/Distribusi (AD)
+# AD & CMF
 try:
     data['AD'] = ta.volume.acc_dist_index(data['High'], data['Low'], data['Close'], data['Volume'], fillna=True)
 except:
     data['AD'] = 0.0
-
-# Chaikin Money Flow (CMF) 20 periode
 try:
     data['CMF'] = ta.volume.chaikin_money_flow(data['High'], data['Low'], data['Close'], data['Volume'], window=20, fillna=True)
 except:
     data['CMF'] = 0.0
 
-# Forward fill + fillna(0)
 data = data.ffill().fillna(0)
 
-# ========== NOTIFIKASI BREAKOUT & VOLUME ==========
+# ========== NOTIFIKASI BREAKOUT ==========
 if not data.empty:
     current_resistance = data['resistance'].iloc[-1]
     current_price = data['Close'].iloc[-1]
     if st.session_state.last_resistance is None:
         st.session_state.last_resistance = current_resistance
-
     if current_price > current_resistance and current_resistance != st.session_state.last_resistance:
         st.toast(f"🚀 BREAKOUT! Harga menembus resistance {current_resistance:.2f}", icon="🚀")
         st.session_state.last_resistance = current_resistance
-
     if volume.sum() > 0:
         vol_last = volume.iloc[-1]
         vol_ma = data['Volume_MA'].iloc[-1]
         if vol_ma > 0:
             volume_ratio = vol_last / vol_ma
             if volume_ratio > 1.8 and volume_ratio != st.session_state.last_volume_ratio:
-                st.toast(f"🔥 Volume Spike! {volume_ratio:.1f}x rata-rata", icon="⚠️")
+                st.toast(f"🔥 Volume Spike! {volume_ratio:.1f}x", icon="⚠️")
                 st.session_state.last_volume_ratio = volume_ratio
 
-# ========== HEADER: INFO HARGA & FUNDAMENTAL ==========
+# ========== HEADER HARGA ==========
 st.title(f"📈 {ticker}")
 last_close = data['Close'].iloc[-1]
 last_high = data['High'].iloc[-1]
@@ -168,12 +164,10 @@ col2.metric("Hari Ini - Tertinggi", f"{last_high:.2f}")
 col3.metric("Hari Ini - Terendah", f"{last_low:.2f}")
 col4.metric("Volume Terakhir", f"{volume.iloc[-1]:,.0f}" if volume.sum() > 0 else "N/A")
 
-# Akumulasi/Distribusi dan CMF
 ad_val = data['AD'].iloc[-1]
 cmf_val = data['CMF'].iloc[-1]
 ad_status = "Akumulasi" if ad_val > 0 else "Distribusi" if ad_val < 0 else "Netral"
 cmf_status = "Akumulasi" if cmf_val > 0 else "Distribusi" if cmf_val < 0 else "Netral"
-
 st.markdown(f"""
 <div style="background-color: #f0f2f6; padding: 10px; border-radius: 10px; margin-bottom: 10px;">
     <b>📊 Akumulasi/Distribusi (AD):</b> {ad_status} ({ad_val:.2f}) &nbsp;&nbsp;|&nbsp;&nbsp;
@@ -181,24 +175,10 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if fundamental:
-    pe = fundamental.get('pe')
-    pb = fundamental.get('pb')
-    div_yield = fundamental.get('div_yield')
-    market_cap = fundamental.get('market_cap')
-    sector = fundamental.get('sector')
-    fund_cols = st.columns(4)
-    fund_cols[0].metric("PER (TTM)", f"{pe:.2f}" if pe else "N/A")
-    fund_cols[1].metric("PBV", f"{pb:.2f}" if pb else "N/A")
-    fund_cols[2].metric("Dividend Yield", f"{div_yield*100:.2f}%" if div_yield else "N/A")
-    fund_cols[3].metric("Market Cap", f"{market_cap/1e12:.2f}T" if market_cap else "N/A")
-    if sector:
-        st.caption(f"Sektor: {sector}")
-
 st.markdown("---")
 
-# ========== TABS UTAMA ==========
-tab1, tab2, tab3, tab4 = st.tabs(["📈 Grafik & Indikator", "🤖 AI Signal & Risk", "🔍 IHSG Scanner", "📖 Glossary"])
+# ========== TABS ==========
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Grafik", "🤖 AI Signal", "🔍 Scanner", "📁 Portfolio", "📖 Info"])
 
 # ========== TAB 1: GRAFIK ==========
 with tab1:
@@ -216,30 +196,28 @@ with tab1:
     if volume.sum() > 0:
         st.bar_chart(volume)
     else:
-        st.info("Volume tidak tersedia untuk indeks (IHSG)")
+        st.info("Volume tidak tersedia untuk indeks")
 
     col_r, col_m = st.columns(2)
     with col_r:
         st.subheader("RSI (14)")
         st.line_chart(data['RSI'])
-        st.caption("RSI < 35: Oversold (potensi beli) | RSI > 70: Overbought (potensi jual)")
+        st.caption("RSI < 35: Oversold | >70: Overbought")
     with col_m:
         st.subheader("MACD")
         st.line_chart(data[['MACD', 'MACD_signal']])
-        st.caption("MACD > Signal: Bullish | MACD < Signal: Bearish")
+        st.caption("MACD > Signal: Bullish")
 
-    st.subheader("Accumulation/Distribution & Chaikin Money Flow")
+    st.subheader("AD & CMF")
     col_ad, col_cmf = st.columns(2)
     with col_ad:
         st.line_chart(data['AD'])
-        st.caption("AD Line naik = akumulasi, turun = distribusi")
     with col_cmf:
         st.line_chart(data['CMF'])
-        st.caption("CMF > 0 = tekanan beli, < 0 = tekanan jual")
 
 # ========== TAB 2: AI SIGNAL & RISK ==========
 with tab2:
-    # Hitung AI Score (0-5)
+    # AI Score
     score = 0
     try:
         if pd.notna(data['RSI'].iloc[-1]) and data['RSI'].iloc[-1] < 35: score += 1
@@ -247,7 +225,7 @@ with tab2:
         if pd.notna(data['SMA20'].iloc[-1]) and pd.notna(data['SMA50'].iloc[-1]) and data['SMA20'].iloc[-1] > data['SMA50'].iloc[-1]: score += 1
         if pd.notna(data['MACD'].iloc[-1]) and pd.notna(data['MACD_signal'].iloc[-1]) and data['MACD'].iloc[-1] > data['MACD_signal'].iloc[-1]: score += 1
         if volume.sum() > 0 and pd.notna(volume.iloc[-1]) and pd.notna(data['Volume_MA'].iloc[-1]) and volume.iloc[-1] > data['Volume_MA'].iloc[-1]: score += 1
-    except Exception:
+    except:
         pass
 
     col_a, col_b = st.columns(2)
@@ -260,22 +238,21 @@ with tab2:
             st.info("🟡 HOLD")
         else:
             st.error("🔻 SELL")
-
     with col_b:
         st.subheader("🎯 Risk Meter")
         returns = data['Close'].pct_change().dropna()
         volatility = returns.std() * 100 if len(returns) > 0 else 0
         if volatility < 1.5:
             risk = "LOW"
-            st.success(f"Risk Level : {risk}")
+            st.success(f"Risk Level: {risk}")
         elif volatility < 3:
             risk = "MEDIUM"
-            st.warning(f"Risk Level : {risk}")
+            st.warning(f"Risk Level: {risk}")
         else:
             risk = "HIGH"
-            st.error(f"Risk Level : {risk}")
+            st.error(f"Risk Level: {risk}")
 
-    # Probability Engine
+    # Probability
     st.subheader("📊 Probability Engine")
     bull = bear = 0
     if data['RSI'].iloc[-1] < 35:
@@ -298,7 +275,7 @@ with tab2:
         bull_prob = bear_prob = 50
     st.write(f"📈 Bullish: {bull_prob:.1f}% | 📉 Bearish: {bear_prob:.1f}%")
 
-    # Momentum Detector
+    # Momentum
     st.subheader("🔥 Momentum Detector")
     if len(data) >= 6:
         momentum = data['Close'].pct_change(5).iloc[-1] * 100
@@ -332,7 +309,7 @@ with tab2:
         else:
             st.info("Volume tidak tersedia")
 
-    # AI FINAL PRO (ambang batas disesuaikan)
+    # AI FINAL PRO
     st.header("🧠 AI FINAL PRO")
     final_score = 0
     if bull_prob > 60:
@@ -368,7 +345,6 @@ with tab2:
     col_e.metric("🎯 Smart Entry", f"{entry:.2f}")
     col_s.metric("🛑 Stoploss", f"{stoploss:.2f}")
     col_t.metric("💰 Target 1", f"{target1:.2f}")
-
     st.write(f"**Risk Reward Ratio:** 1 : {rr:.2f}")
     if rr > 2:
         st.success("Good Trade Setup")
@@ -413,7 +389,7 @@ with tab2:
     else:
         st.error("❌ NO TRADE")
 
-    # FINAL DECISION (ambang batas disesuaikan)
+    # FINAL DECISION
     st.header("FINAL DECISION")
     if score >= 3:
         st.success("🟢 ACCUMULATE")
@@ -454,7 +430,7 @@ with tab3:
                 continue
         return pd.DataFrame(rows, columns=["Ticker", "RSI", "Score"])
 
-    with st.spinner("Memindai 15 saham IHSG..."):
+    with st.spinner("Memindai 15 saham..."):
         scan_df = scan_market_fast(full_ihsg_list)
 
     if not scan_df.empty:
@@ -468,72 +444,132 @@ with tab3:
     else:
         st.warning("Scanner gagal, coba lagi nanti.")
 
-# ========== TAB 4: GLOSSARY ==========
+# ========== TAB 4: PORTFOLIO & POSITION SIZING ==========
 with tab4:
-    st.markdown("""
-    ### 📊 TECHNICAL INDICATORS
-    **1. RSI (Relative Strength Index)**
-    - Mengukur kekuatan pergerakan harga
-    - RSI < 30 → Oversold (potensi naik)
-    - RSI > 70 → Overbought (potensi turun)
-    - RSI 30-70 → Normal
+    st.subheader("📁 Portfolio Tracker")
+    
+    # Form untuk menambah posisi
+    with st.expander("➕ Tambah Posisi Baru"):
+        col_t1, col_t2, col_t3, col_t4 = st.columns(4)
+        with col_t1:
+            ticker_entry = st.text_input("Ticker", key="entry_ticker", help="Contoh: BBCA.JK")
+        with col_t2:
+            entry_date = st.date_input("Tanggal Entry", value=date.today())
+        with col_t3:
+            entry_price = st.number_input("Harga Entry", min_value=0.0, step=10.0)
+        with col_t4:
+            shares = st.number_input("Jumlah Saham", min_value=1, step=100)
+        
+        if st.button("Simpan Posisi"):
+            if ticker_entry and entry_price > 0 and shares > 0:
+                st.session_state.portfolio.append({
+                    'ticker': fix_ticker(ticker_entry),
+                    'entry_date': entry_date.strftime('%Y-%m-%d'),
+                    'entry_price': entry_price,
+                    'shares': shares
+                })
+                st.success("Posisi ditambahkan!")
+                st.rerun()
+            else:
+                st.error("Isi semua field dengan benar.")
+    
+    # Tampilkan portofolio
+    if st.session_state.portfolio:
+        portfolio_df = pd.DataFrame(st.session_state.portfolio)
+        # Ambil harga terbaru untuk setiap ticker
+        current_prices = {}
+        for tick in portfolio_df['ticker'].unique():
+            try:
+                tick_data = yf.download(tick, period="1d", progress=False)
+                if not tick_data.empty:
+                    current_prices[tick] = tick_data['Close'].iloc[-1]
+                else:
+                    current_prices[tick] = None
+            except:
+                current_prices[tick] = None
+        
+        portfolio_df['current_price'] = portfolio_df['ticker'].map(current_prices)
+        portfolio_df['unrealized_pnl'] = (portfolio_df['current_price'] - portfolio_df['entry_price']) * portfolio_df['shares']
+        portfolio_df['pnl_pct'] = ((portfolio_df['current_price'] - portfolio_df['entry_price']) / portfolio_df['entry_price']) * 100
+        
+        st.dataframe(portfolio_df, use_container_width=True)
+        total_pnl = portfolio_df['unrealized_pnl'].sum()
+        st.metric("Total Unrealized P&L", f"{total_pnl:,.2f}", delta=f"{total_pnl:+,.2f}")
+        
+        # Tombol hapus semua
+        if st.button("Hapus Semua Posisi"):
+            st.session_state.portfolio = []
+            st.rerun()
+    else:
+        st.info("Belum ada posisi. Gunakan form di atas untuk menambahkan.")
+    
+    st.divider()
+    
+    # Position Sizing Calculator
+    st.subheader("📐 Position Sizing Calculator")
+    col_cap, col_risk, col_sl = st.columns(3)
+    with col_cap:
+        capital = st.number_input("Modal (Rp)", min_value=0.0, value=100_000_000.0, step=10_000_000.0)
+    with col_risk:
+        risk_percent = st.number_input("Risiko per Trade (%)", min_value=0.0, max_value=100.0, value=2.0, step=0.5)
+    with col_sl:
+        stoploss_price = st.number_input("Stop Loss (Rp)", min_value=0.0, value=last_close * 0.97 if last_close else 0.0)
+    
+    if capital > 0 and risk_percent > 0 and stoploss_price > 0 and last_close > 0:
+        risk_amount = capital * (risk_percent / 100)
+        price_risk = last_close - stoploss_price
+        if price_risk > 0:
+            suggested_shares = int(risk_amount / price_risk)
+            position_value = suggested_shares * last_close
+            st.write(f"**Jumlah saham yang direkomendasikan:** {suggested_shares:,} lembar")
+            st.write(f"Nilai posisi: Rp {position_value:,.2f} ({position_value/capital*100:.1f}% dari modal)")
+            if position_value > capital:
+                st.warning("Nilai posisi melebihi modal! Turunkan jumlah saham atau perbesar stop loss.")
+        else:
+            st.warning("Stop loss harus di bawah harga saat ini.")
+    else:
+        st.info("Masukkan modal, risiko, dan stop loss untuk menghitung.")
 
-    **2. SMA (Simple Moving Average)**
-    - Rata-rata harga dalam periode tertentu
-    - SMA20: Trend jangka pendek (1 bulan)
-    - SMA50: Trend jangka menengah (2-3 bulan)
-    - Harga > SMA = Trend naik
-    - Harga < SMA = Trend turun
-
-    **3. MACD (Moving Average Convergence Divergence)**
-    - Indikator momentum dan trend
-    - MACD > Signal = Bullish
-    - MACD < Signal = Bearish
-
-    **4. Volume & Volume MA**
-    - Volume: Jumlah saham yang diperdagangkan
-    - Volume MA: Rata-rata volume 20 hari
-    - Volume > MA(20)×1.8 = Volume Spike
-
-    **5. Support & Resistance**
-    - Support: Level harga terendah (area beli)
-    - Resistance: Level harga tertinggi (area jual)
-
-    **6. Accumulation/Distribution (AD)**
-    - Mengukur aliran dana masuk/keluar
-    - AD > 0 = Akumulasi (tekanan beli)
-    - AD < 0 = Distribusi (tekanan jual)
-
-    **7. Chaikin Money Flow (CMF)**
-    - Volume-weighted indicator
-    - CMF > 0 = Akumulasi
-    - CMF < 0 = Distribusi
-
-    ### 🎯 SIGNAL SYSTEMS
-    **AI Score (0-5)**
-    - +1: RSI < 35
-    - +1: Harga > SMA20
-    - +1: SMA20 > SMA50
-    - +1: MACD > Signal
-    - +1: Volume > Rata-rata
-    - 4-5: STRONG BUY | 3: HOLD | 0-2: SELL
-
-    **Probability Engine**
-    - Menghitung peluang Bullish/Bearish dari 3 indikator
-
-    **Risk Meter**
-    - Volatilitas harian: LOW (<1.5%), MEDIUM (1.5-3%), HIGH (>3%)
-
-    **God Mode**
-    - Kombinasi Risk Reward, Trend Score, RSI, dan SMA untuk sinyal akhir
-
-    ### 💡 TIPS
-    1. Gunakan timeframe yang berbeda untuk konfirmasi trend.
-    2. Jangan hanya mengandalkan satu indikator.
-    3. Selalu gunakan stop loss.
-    4. Breakout tanpa volume tinggi seringkali false breakout.
-    """)
+# ========== TAB 5: INFORMASI FUNDAMENTAL & GLOSSARY ==========
+with tab5:
+    if not ticker.startswith('^'):
+        st.subheader("📊 Fundamental Details")
+        fund = get_fundamental_details(ticker)
+        if fund:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("PER (TTM)", f"{fund['pe']:.2f}" if fund['pe'] else "N/A")
+                st.metric("PBV", f"{fund['pb']:.2f}" if fund['pb'] else "N/A")
+                st.metric("Dividend Yield", f"{fund['div_yield']*100:.2f}%" if fund['div_yield'] else "N/A")
+                st.metric("Market Cap", f"{fund['market_cap']/1e12:.2f}T" if fund['market_cap'] else "N/A")
+                st.metric("Sektor", fund['sector'] if fund['sector'] else "N/A")
+            with col2:
+                st.metric("ROA", f"{fund['roa']*100:.2f}%" if fund['roa'] else "N/A")
+                st.metric("ROE", f"{fund['roe']*100:.2f}%" if fund['roe'] else "N/A")
+                st.metric("Debt to Equity", f"{fund['debt_to_equity']:.2f}" if fund['debt_to_equity'] else "N/A")
+                st.metric("Profit Margin", f"{fund['profit_margin']*100:.2f}%" if fund['profit_margin'] else "N/A")
+                st.metric("Revenue Growth (YoY)", f"{fund['revenue_growth']*100:.2f}%" if fund['revenue_growth'] else "N/A")
+        else:
+            st.info("Data fundamental tidak tersedia untuk ticker ini.")
+    else:
+        st.info("Data fundamental tidak tersedia untuk indeks.")
+    
+    st.divider()
+    
+    # Glossary (ringkasan)
+    with st.expander("📖 Glossary (Klik untuk lihat)"):
+        st.markdown("""
+        **RSI** < 35: Oversold | >70: Overbought  
+        **SMA20/50**: Harga > SMA = uptrend  
+        **MACD > Signal**: Bullish  
+        **Volume > Volume MA**: Volume di atas rata-rata  
+        **AD > 0**: Akumulasi (tekanan beli)  
+        **CMF > 0**: Tekanan beli  
+        **Risk Reward Ratio**: Target/risk > 2 = good setup  
+        **AI Score** 4-5: Strong Buy, 3: Hold, 0-2: Sell  
+        **FINAL DECISION** score ≥3: Accumulate, =2: Wait, ≤1: Avoid
+        """)
 
 # ========== DISCLAIMER ==========
 st.markdown("---")
-st.caption("⚠️ **DISCLAIMER:** Dashboard ini hanya untuk edukasi dan analisis teknikal otomatis. Bukan rekomendasi beli/jual. Keputusan investasi sepenuhnya risiko Anda.")
+st.caption("⚠️ **DISCLAIMER:** Dashboard ini hanya untuk edukasi dan analisis otomatis. Bukan rekomendasi beli/jual. Keputusan investasi sepenuhnya risiko Anda.")
