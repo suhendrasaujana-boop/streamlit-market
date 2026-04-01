@@ -119,16 +119,25 @@ def get_fundamental_details(ticker: str) -> Dict[str, Any]:
 
 @st.cache_data(ttl=CACHE_TTL)
 def load_data(ticker: str, timeframe: str) -> pd.DataFrame:
+    # Pilih periode berdasarkan timeframe agar data cukup
+    if timeframe == "1mo":
+        period = "5y"      # 5 tahun ≈ 60 baris bulanan
+    elif timeframe == "1wk":
+        period = "3y"      # 3 tahun ≈ 156 baris mingguan
+    else:
+        period = "2y"      # 2 tahun ≈ 504 baris harian
+    
     try:
-        df = yf.download(ticker, period="2y", interval=timeframe, progress=False, auto_adjust=False)
+        df = yf.download(ticker, period=period, interval=timeframe, progress=False, auto_adjust=False)
         if df.empty:
+            # Fallback ke 1 tahun jika gagal
             df = yf.download(ticker, period="1y", interval=timeframe, progress=False, auto_adjust=False)
         if df.empty:
             return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df = df.dropna(how='all')
-        # Pastikan kolom Volume ada, jika tidak buat dengan nilai 0
+        # Pastikan kolom Volume ada
         if 'Volume' not in df.columns:
             df['Volume'] = 0
         else:
@@ -157,7 +166,6 @@ def scan_market_fast(tickers: List[str]) -> pd.DataFrame:
                 if len(df) < 20:
                     continue
                 close = df['Close']
-                # Hitung RSI dengan penanganan data kurang
                 if len(close) >= 14:
                     rsi = ta.momentum.rsi(close, window=14).iloc[-1]
                 else:
@@ -246,14 +254,12 @@ def get_portfolio_current_prices(tickers: List[str]) -> Dict[str, Optional[float
     if not tickers:
         return {}
     try:
-        # Jika hanya satu ticker, download sebagai Series biasa
         if len(tickers) == 1:
             data = yf.download(tickers[0], period="1d", progress=False, auto_adjust=False)
             if not data.empty:
                 return {tickers[0]: data['Close'].iloc[-1]}
             else:
                 return {tickers[0]: None}
-        # Multiple tickers
         data = yf.download(tickers, period="1d", group_by='ticker', progress=False, auto_adjust=False)
         prices = {}
         for tick in tickers:
@@ -269,26 +275,21 @@ def get_portfolio_current_prices(tickers: List[str]) -> Dict[str, Optional[float
         st.error(f"Error fetching portfolio prices: {e}")
         return {t: None for t in tickers}
 
-# ========== FUNGSI BACKTEST, ML, SENTIMEN ==========
 def backtest_strategy(df, initial_capital=1000000):
     """Backtest strategi RSI < 35 dan Close > SMA20"""
     if df.empty or len(df) < 50:
         return None
     df = df.copy()
-    # Hitung indikator
     df['sma20'] = df['Close'].rolling(20).mean()
     if TA_AVAILABLE:
         df['rsi'] = ta.momentum.rsi(df['Close'], window=14)
     else:
         df['rsi'] = 50.0
-    # Drop baris dengan NaN (terutama awal data)
     df = df.dropna(subset=['sma20', 'rsi'])
     if len(df) < 10:
         return None
-    # Sinyal beli: RSI < 35 dan Close > SMA20
     df['buy_signal'] = (df['rsi'] < 35) & (df['Close'] > df['sma20'])
     df['sell_signal'] = (df['rsi'] > 70) | (df['Close'] < df['sma20'])
-    # Simulasi
     position = 0
     cash = initial_capital
     trades = []
@@ -318,7 +319,6 @@ def prepare_ml_features(df):
     if df.empty or len(df) < 100:
         return None, None
     df = df.copy()
-    # Pastikan kolom Volume ada
     if 'Volume' not in df.columns:
         df['Volume'] = 0
     if TA_AVAILABLE:
@@ -332,7 +332,6 @@ def prepare_ml_features(df):
     df['sma20'] = df['Close'].rolling(20).mean()
     df['sma50'] = df['Close'].rolling(50).mean()
     df['volume_ma'] = df['Volume'].rolling(20).mean()
-    # Target: kenaikan >1% dalam 5 hari
     df['future_return'] = df['Close'].shift(-5) / df['Close'] - 1
     df['target'] = (df['future_return'] > 0.01).astype(int)
     df = df.dropna()
@@ -758,17 +757,14 @@ with tab5:
     if SKLEARN_AVAILABLE:
         X, y = prepare_ml_features(data)
         if X is not None and len(X) > 50:
-            # Split data (waktu berurutan)
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=False)
             model = RandomForestClassifier(n_estimators=100, random_state=42)
             model.fit(X_train, y_train)
             acc = accuracy_score(y_test, model.predict(X_test))
             st.metric("Akurasi Model (Test)", f"{acc:.2%}")
-            # Prediksi untuk hari ini
             latest = X.iloc[-1:].values
             prob = model.predict_proba(latest)[0][1]
             st.write(f"**Probabilitas harga naik >1% dalam 5 hari:** {prob:.2%}")
-            # Feature importance
             if st.checkbox("Tampilkan Feature Importance"):
                 importance = pd.DataFrame({'Feature': X.columns, 'Importance': model.feature_importances_})
                 st.bar_chart(importance.set_index('Feature'))
@@ -827,7 +823,6 @@ with tab6:
     
     st.divider()
     
-    # Opsional: tampilkan sentimen juga di tab info jika tersedia
     if FEEDPARSER_AVAILABLE and TEXTBLOB_AVAILABLE:
         st.subheader("📰 Diversifikasi Sinyal: Sentimen Berita Terkini")
         sentiment = get_news_sentiment()
