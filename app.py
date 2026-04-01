@@ -100,7 +100,7 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/stock.png", width=80)
     st.title("🔐 Akun Saya")
     if st.session_state.user is None:
-        if supapse is not None:
+        if supabase is not None:
             tab1, tab2 = st.tabs(["Login", "Daftar"])
             with tab1:
                 login_email = st.text_input("Email", key="login_email")
