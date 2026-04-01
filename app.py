@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import ta
 import plotly.graph_objects as go
 import numpy as np
 from datetime import datetime, date, timedelta
@@ -9,6 +8,13 @@ import time
 from typing import Dict, List, Optional, Tuple, Any
 
 # ========== IMPORT OPSIONAL DENGAN PENANGANAN ERROR ==========
+try:
+    import ta
+    TA_AVAILABLE = True
+except ImportError:
+    TA_AVAILABLE = False
+    st.warning("Library 'ta' tidak terinstal. Install dengan: pip install ta")
+
 try:
     import feedparser
     FEEDPARSER_AVAILABLE = True
@@ -57,7 +63,7 @@ if 'last_volume_notify_time' not in st.session_state:
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = []
 
-# ========== FUNGSI BANTU (SAMA PERSIS) ==========
+# ========== FUNGSI BANTU ==========
 def safe_sma(series: pd.Series, window: int) -> pd.Series:
     return series.rolling(window, min_periods=1).mean()
 
@@ -122,7 +128,10 @@ def load_data(ticker: str, timeframe: str) -> pd.DataFrame:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df = df.dropna(how='all')
-        if 'Volume' in df.columns:
+        # Pastikan kolom Volume ada, jika tidak buat dengan nilai 0
+        if 'Volume' not in df.columns:
+            df['Volume'] = 0
+        else:
             df['Volume'] = df['Volume'].fillna(0)
         return df
     except Exception as e:
@@ -141,13 +150,18 @@ def scan_market_fast(tickers: List[str]) -> pd.DataFrame:
                         continue
                     df = all_data[ticker].dropna()
                 else:
-                    if ticker != all_data.columns.get_level_values(0)[0]:
+                    # Hanya satu ticker
+                    if ticker != tickers[0]:
                         continue
                     df = all_data.dropna()
                 if len(df) < 20:
                     continue
                 close = df['Close']
-                rsi = ta.momentum.rsi(close, window=14).iloc[-1] if len(close) >= 14 else 50
+                # Hitung RSI dengan penanganan data kurang
+                if len(close) >= 14:
+                    rsi = ta.momentum.rsi(close, window=14).iloc[-1]
+                else:
+                    rsi = 50.0
                 sma20 = close.rolling(20).mean().iloc[-1]
                 if pd.isna(sma20):
                     sma20 = close.iloc[-1]
@@ -169,12 +183,12 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['SMA20'] = safe_sma(close, 20)
     df['SMA50'] = safe_sma(close, 50)
 
-    if len(df) >= 14:
+    if TA_AVAILABLE and len(df) >= 14:
         df['RSI'] = ta.momentum.rsi(close, window=14)
     else:
         df['RSI'] = 50.0
 
-    if len(df) >= 26:
+    if TA_AVAILABLE and len(df) >= 26:
         macd = ta.trend.MACD(close)
         df['MACD'] = macd.macd()
         df['MACD_signal'] = macd.macd_signal()
@@ -190,16 +204,20 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['support'] = df['Low'].rolling(20, min_periods=1).min()
     df['resistance'] = df['High'].rolling(20, min_periods=1).max()
 
-    try:
-        df['AD'] = ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume'], fillna=True)
-    except Exception:
+    if TA_AVAILABLE:
+        try:
+            df['AD'] = ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume'], fillna=True)
+        except Exception:
+            df['AD'] = 0.0
+        try:
+            df['CMF'] = ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20, fillna=True)
+        except Exception:
+            df['CMF'] = 0.0
+    else:
         df['AD'] = 0.0
-    try:
-        df['CMF'] = ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20, fillna=True)
-    except Exception:
         df['CMF'] = 0.0
 
-    if len(df) >= 20:
+    if TA_AVAILABLE and len(df) >= 20:
         bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
         df['BB_upper'] = bb.bollinger_hband()
         df['BB_middle'] = bb.bollinger_mavg()
@@ -228,42 +246,45 @@ def get_portfolio_current_prices(tickers: List[str]) -> Dict[str, Optional[float
     if not tickers:
         return {}
     try:
+        # Jika hanya satu ticker, download sebagai Series biasa
+        if len(tickers) == 1:
+            data = yf.download(tickers[0], period="1d", progress=False, auto_adjust=False)
+            if not data.empty:
+                return {tickers[0]: data['Close'].iloc[-1]}
+            else:
+                return {tickers[0]: None}
+        # Multiple tickers
         data = yf.download(tickers, period="1d", group_by='ticker', progress=False, auto_adjust=False)
         prices = {}
-        missing = []
         for tick in tickers:
             try:
-                if isinstance(data.columns, pd.MultiIndex):
-                    if tick in data.columns.levels[0]:
-                        prices[tick] = data[tick]['Close'].iloc[-1]
-                    else:
-                        missing.append(tick)
-                        prices[tick] = None
+                if tick in data.columns.levels[0]:
+                    prices[tick] = data[tick]['Close'].iloc[-1]
                 else:
-                    if tick == data.columns.get_level_values(0)[0]:
-                        prices[tick] = data['Close'].iloc[-1]
-                    else:
-                        missing.append(tick)
-                        prices[tick] = None
+                    prices[tick] = None
             except Exception:
-                missing.append(tick)
                 prices[tick] = None
-        if missing:
-            st.warning(f"Tidak dapat mengambil harga untuk: {', '.join(missing)}")
         return prices
     except Exception as e:
         st.error(f"Error fetching portfolio prices: {e}")
         return {t: None for t in tickers}
 
-# ========== FUNGSI BACKTEST, ML, SENTIMEN (DIPERBAIKI) ==========
+# ========== FUNGSI BACKTEST, ML, SENTIMEN ==========
 def backtest_strategy(df, initial_capital=1000000):
     """Backtest strategi RSI < 35 dan Close > SMA20"""
     if df.empty or len(df) < 50:
-        return None  # data tidak cukup
+        return None
     df = df.copy()
     # Hitung indikator
     df['sma20'] = df['Close'].rolling(20).mean()
-    df['rsi'] = ta.momentum.rsi(df['Close'], window=14)
+    if TA_AVAILABLE:
+        df['rsi'] = ta.momentum.rsi(df['Close'], window=14)
+    else:
+        df['rsi'] = 50.0
+    # Drop baris dengan NaN (terutama awal data)
+    df = df.dropna(subset=['sma20', 'rsi'])
+    if len(df) < 10:
+        return None
     # Sinyal beli: RSI < 35 dan Close > SMA20
     df['buy_signal'] = (df['rsi'] < 35) & (df['Close'] > df['sma20'])
     df['sell_signal'] = (df['rsi'] > 70) | (df['Close'] < df['sma20'])
@@ -297,12 +318,20 @@ def prepare_ml_features(df):
     if df.empty or len(df) < 100:
         return None, None
     df = df.copy()
-    df['rsi'] = ta.momentum.rsi(df['Close'], window=14)
+    # Pastikan kolom Volume ada
+    if 'Volume' not in df.columns:
+        df['Volume'] = 0
+    if TA_AVAILABLE:
+        df['rsi'] = ta.momentum.rsi(df['Close'], window=14)
+        df['ad'] = ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume'], fillna=True)
+        df['cmf'] = ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20, fillna=True)
+    else:
+        df['rsi'] = 50.0
+        df['ad'] = 0.0
+        df['cmf'] = 0.0
     df['sma20'] = df['Close'].rolling(20).mean()
     df['sma50'] = df['Close'].rolling(50).mean()
     df['volume_ma'] = df['Volume'].rolling(20).mean()
-    df['ad'] = ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume'], fillna=True)
-    df['cmf'] = ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20, fillna=True)
     # Target: kenaikan >1% dalam 5 hari
     df['future_return'] = df['Close'].shift(-5) / df['Close'] - 1
     df['target'] = (df['future_return'] > 0.01).astype(int)
@@ -406,7 +435,7 @@ st.markdown("---")
 # ========== TABS ==========
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Grafik", "🤖 AI Signal", "🔍 Scanner", "📁 Portfolio", "🧪 Backtest & ML", "📖 Info"])
 
-# ========== TAB 1: GRAFIK (SAMA) ==========
+# ========== TAB 1: GRAFIK ==========
 with tab1:
     st.subheader("Candlestick Chart")
     fig = go.Figure()
@@ -444,7 +473,7 @@ with tab1:
     with col_cmf:
         st.line_chart(data['CMF'])
 
-# ========== TAB 2: AI SIGNAL (SAMA) ==========
+# ========== TAB 2: AI SIGNAL ==========
 with tab2:
     score = calculate_ai_score(data, volume)
 
@@ -622,7 +651,7 @@ with tab2:
     else:
         st.error("🔴 AVOID")
 
-# ========== TAB 3: SCANNER (SAMA) ==========
+# ========== TAB 3: SCANNER ==========
 with tab3:
     st.subheader("🔥 SUPER FAST IHSG SCANNER (15 Blue Chip)")
     with st.spinner("Memindai 15 saham..."):
@@ -638,7 +667,7 @@ with tab3:
     else:
         st.warning("Scanner gagal, coba lagi nanti.")
 
-# ========== TAB 4: PORTFOLIO (SAMA) ==========
+# ========== TAB 4: PORTFOLIO ==========
 with tab4:
     st.subheader("📁 Portfolio Tracker")
     with st.expander("➕ Tambah Posisi Baru"):
@@ -702,7 +731,7 @@ with tab4:
     else:
         st.info("Masukkan modal, risiko, dan stop loss untuk menghitung.")
 
-# ========== TAB 5: BACKTEST & ML (DIPERBAIKI) ==========
+# ========== TAB 5: BACKTEST & ML ==========
 with tab5:
     st.header("🧪 Backtesting & Machine Learning")
     
@@ -717,7 +746,6 @@ with tab5:
         with st.expander("Lihat Detail Transaksi"):
             st.dataframe(pd.DataFrame(bt_result['trades'], columns=['Tipe', 'Tanggal', 'Harga']))
     else:
-        # Pesan yang jelas jika data tidak cukup
         if len(data) < 50:
             st.warning(f"Data tidak cukup untuk backtest. Minimal 50 baris, saat ini hanya {len(data)} baris.")
         else:
@@ -773,7 +801,7 @@ with tab5:
             missing.append("textblob")
         st.error(f"❌ Fitur sentimen tidak tersedia karena library {', '.join(missing)} tidak terinstal. Install dengan: pip install {' '.join(missing)}")
 
-# ========== TAB 6: INFO (SAMA, TAMBAH SENTIMEN OPSIONAL) ==========
+# ========== TAB 6: INFO ==========
 with tab6:
     if not ticker.startswith('^'):
         st.subheader("📊 Fundamental Details")
