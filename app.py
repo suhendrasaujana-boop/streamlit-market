@@ -21,12 +21,6 @@ def safe_sma(series, window):
         return series.rolling(window, min_periods=1).mean()
     return ta.trend.sma_indicator(series, window=window)
 
-def format_number(x):
-    """Format angka dengan koma untuk ribuan (untuk tampilan)"""
-    if x is None or pd.isna(x):
-        return "N/A"
-    return f"{x:,.2f}"
-
 def fix_ticker(ticker):
     """Otomatis tambahkan .JK jika diperlukan (kecuali indeks)"""
     ticker = ticker.strip().upper()
@@ -36,7 +30,6 @@ def fix_ticker(ticker):
 
 # ========== SIDEBAR ==========
 with st.sidebar:
-    # Gunakan emoji sebagai ikon (stabil, tidak bergantung URL)
     st.markdown("# 📊 Smart Market Dashboard")
     
     ticker_input = st.text_input(
@@ -44,14 +37,12 @@ with st.sidebar:
         "^JKSE",
         help="Contoh: BBCA, BBRI, ASII, atau ^JKSE untuk IHSG. Anda boleh ketik tanpa .JK, akan otomatis ditambahkan."
     )
-    # Perbaiki ticker (tambahkan .JK jika perlu)
     ticker = fix_ticker(ticker_input)
     if ticker != ticker_input:
         st.info(f"Format ticker disesuaikan menjadi: {ticker}")
     
     timeframe = st.selectbox("Timeframe", ["1d","1wk","1mo"], help="1d = harian, 1wk = mingguan, 1mo = bulanan")
     
-    # Tombol refresh manual
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -94,7 +85,6 @@ if data.empty or len(data) < 5:
     st.warning(f"Data tidak cukup untuk {ticker} (minimal 5 periode).")
     st.stop()
 
-# Data tambahan untuk fundamental (jika saham, bukan indeks)
 if not ticker.startswith('^'):
     fundamental = get_fundamental(ticker)
 else:
@@ -140,10 +130,10 @@ try:
 except:
     data['CMF'] = 0.0
 
-# Forward fill untuk semua kolom, lalu isi NaN dengan 0
+# Forward fill + fillna(0)
 data = data.ffill().fillna(0)
 
-# ========== NOTIFIKASI BREAKOUT (toast) ==========
+# ========== NOTIFIKASI BREAKOUT & VOLUME ==========
 if not data.empty:
     current_resistance = data['resistance'].iloc[-1]
     current_price = data['Close'].iloc[-1]
@@ -191,7 +181,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Fundamental ringkas (jika ada)
 if fundamental:
     pe = fundamental.get('pe')
     pb = fundamental.get('pb')
@@ -223,14 +212,12 @@ with tab1:
     fig.add_trace(go.Scatter(x=data.index, y=data['resistance'], name="Resistance", line=dict(dash='dash')))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Volume
     st.subheader("Volume")
     if volume.sum() > 0:
         st.bar_chart(volume)
     else:
         st.info("Volume tidak tersedia untuk indeks (IHSG)")
 
-    # RSI & MACD dalam 2 kolom
     col_r, col_m = st.columns(2)
     with col_r:
         st.subheader("RSI (14)")
@@ -241,7 +228,6 @@ with tab1:
         st.line_chart(data[['MACD', 'MACD_signal']])
         st.caption("MACD > Signal: Bullish | MACD < Signal: Bearish")
 
-    # AD & CMF
     st.subheader("Accumulation/Distribution & Chaikin Money Flow")
     col_ad, col_cmf = st.columns(2)
     with col_ad:
@@ -253,7 +239,7 @@ with tab1:
 
 # ========== TAB 2: AI SIGNAL & RISK ==========
 with tab2:
-    # AI Score
+    # Hitung AI Score (0-5)
     score = 0
     try:
         if pd.notna(data['RSI'].iloc[-1]) and data['RSI'].iloc[-1] < 35: score += 1
@@ -329,7 +315,6 @@ with tab2:
     else:
         st.warning("Sideways")
 
-    # Breakout Detector & Volume Alert
     col_brk, col_vol = st.columns(2)
     with col_brk:
         st.subheader("🚀 Breakout Detector")
@@ -347,7 +332,7 @@ with tab2:
         else:
             st.info("Volume tidak tersedia")
 
-    # AI FINAL PRO
+    # AI FINAL PRO (ambang batas disesuaikan)
     st.header("🧠 AI FINAL PRO")
     final_score = 0
     if bull_prob > 60:
@@ -358,9 +343,9 @@ with tab2:
         final_score += 1
     if volume.sum() > 0 and volume.iloc[-1] > data['Volume_MA'].iloc[-1]:
         final_score += 1
-    if final_score >= 3:
+    if final_score >= 2:
         st.success("🚀 STRONG ACCUMULATE")
-    elif final_score == 2:
+    elif final_score == 1:
         st.warning("🟡 SPEC BUY")
     else:
         st.error("🔻 WAIT / AVOID")
@@ -392,7 +377,6 @@ with tab2:
     else:
         st.error("Bad Setup")
 
-    # Trend Score & Breakout Strength
     col_ts, col_bs = st.columns(2)
     with col_ts:
         st.subheader("📈 Trend Score")
@@ -412,7 +396,6 @@ with tab2:
         else:
             st.write("No Breakout")
 
-    # FINAL GOD SIGNAL
     st.header("🧠 FINAL GOD SIGNAL")
     god_score = 0
     if rr > 2:
@@ -430,16 +413,16 @@ with tab2:
     else:
         st.error("❌ NO TRADE")
 
-    # FINAL DECISION
+    # FINAL DECISION (ambang batas disesuaikan)
     st.header("FINAL DECISION")
-    if score >= 4:
+    if score >= 3:
         st.success("🟢 ACCUMULATE")
-    elif score == 3:
+    elif score == 2:
         st.warning("🟡 WAIT")
     else:
         st.error("🔴 AVOID")
 
-# ========== TAB 3: IHSG SCANNER (DIPERBAIKI) ==========
+# ========== TAB 3: IHSG SCANNER ==========
 with tab3:
     st.subheader("🔥 SUPER FAST IHSG SCANNER (15 Blue Chip)")
 
