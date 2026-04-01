@@ -118,15 +118,23 @@ def load_data(ticker: str, timeframe: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=SCANNER_CACHE_TTL)
 def scan_market_fast(tickers: List[str]) -> pd.DataFrame:
-    """Pindai saham dengan download batch"""
+    """Pindai saham dengan download batch - periode 3 bulan untuk kecepatan"""
     try:
-        all_data = yf.download(tickers, period="6mo", interval="1d", group_by="ticker", progress=False, threads=True, auto_adjust=False)
+        # Gunakan periode 3 bulan (cukup untuk RSI dan SMA20)
+        all_data = yf.download(tickers, period="3mo", interval="1d", group_by="ticker", progress=False, threads=True, auto_adjust=False)
         rows = []
         for ticker in tickers:
             try:
-                if ticker not in all_data.columns.levels[0]:
-                    continue
-                df = all_data[ticker].dropna()
+                # Penanganan robust untuk MultiIndex atau single ticker
+                if isinstance(all_data.columns, pd.MultiIndex):
+                    if ticker not in all_data.columns.levels[0]:
+                        continue
+                    df = all_data[ticker].dropna()
+                else:
+                    # Jika hanya satu ticker, all_data adalah DataFrame biasa
+                    if ticker != all_data.columns.get_level_values(0)[0]:
+                        continue
+                    df = all_data.dropna()
                 if len(df) < 20:
                     continue
                 close = df['Close']
@@ -144,7 +152,7 @@ def scan_market_fast(tickers: List[str]) -> pd.DataFrame:
         return pd.DataFrame()
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Tambahkan indikator teknis ke dataframe"""
+    """Tambahkan indikator teknis ke dataframe dengan pengecekan data minimal"""
     if df.empty:
         return df
     close = df['Close']
@@ -153,11 +161,13 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['SMA20'] = safe_sma(close, 20)
     df['SMA50'] = safe_sma(close, 50)
 
+    # RSI: butuh minimal 14 data
     if len(df) >= 14:
         df['RSI'] = ta.momentum.rsi(close, window=14)
     else:
         df['RSI'] = 50.0
 
+    # MACD: butuh minimal 26 data
     if len(df) >= 26:
         macd = ta.trend.MACD(close)
         df['MACD'] = macd.macd()
@@ -166,6 +176,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['MACD'] = 0.0
         df['MACD_signal'] = 0.0
 
+    # Volume MA
     if volume.sum() > 0:
         df['Volume_MA'] = volume.rolling(20, min_periods=1).mean()
     else:
@@ -184,7 +195,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         df['CMF'] = 0.0
 
-    # Bollinger Bands (tambahan)
+    # Bollinger Bands (butuh minimal 20)
     if len(df) >= 20:
         bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
         df['BB_upper'] = bb.bollinger_hband()
@@ -212,20 +223,33 @@ def calculate_ai_score(df: pd.DataFrame, volume: pd.Series) -> int:
     return sum(conditions)
 
 def get_portfolio_current_prices(tickers: List[str]) -> Dict[str, Optional[float]]:
-    """Ambil harga terkini untuk semua ticker portofolio secara batch"""
+    """Ambil harga terkini untuk semua ticker portofolio secara batch, dengan peringatan jika ada yang gagal"""
     if not tickers:
         return {}
     try:
         data = yf.download(tickers, period="1d", group_by='ticker', progress=False, auto_adjust=False)
         prices = {}
+        missing = []
         for tick in tickers:
             try:
-                if tick in data.columns.levels[0]:
-                    prices[tick] = data[tick]['Close'].iloc[-1]
+                if isinstance(data.columns, pd.MultiIndex):
+                    if tick in data.columns.levels[0]:
+                        prices[tick] = data[tick]['Close'].iloc[-1]
+                    else:
+                        missing.append(tick)
+                        prices[tick] = None
                 else:
-                    prices[tick] = None
+                    # Single ticker case
+                    if tick == data.columns.get_level_values(0)[0]:
+                        prices[tick] = data['Close'].iloc[-1]
+                    else:
+                        missing.append(tick)
+                        prices[tick] = None
             except Exception:
+                missing.append(tick)
                 prices[tick] = None
+        if missing:
+            st.warning(f"Tidak dapat mengambil harga untuk: {', '.join(missing)}")
         return prices
     except Exception as e:
         st.error(f"Error fetching portfolio prices: {e}")
@@ -372,9 +396,15 @@ with tab2:
         st.subheader("🎯 Risk Meter")
         returns = data['Close'].pct_change().dropna()
         if len(returns) > 0:
-            # Volatilitas tahunan (dalam persen)
+            # Annualisasi berdasarkan timeframe
+            if timeframe == "1d":
+                periods_per_year = 252
+            elif timeframe == "1wk":
+                periods_per_year = 52
+            else:  # "1mo"
+                periods_per_year = 12
             daily_vol = returns.std()
-            annual_vol = daily_vol * np.sqrt(252) * 100
+            annual_vol = daily_vol * np.sqrt(periods_per_year) * 100
         else:
             annual_vol = 0.0
         if annual_vol < 15:
