@@ -155,7 +155,7 @@ else:
 data['support'] = data['Low'].rolling(20, min_periods=1).min()
 data['resistance'] = data['High'].rolling(20, min_periods=1).max()
 
-data = data.fillna(method='ffill').fillna(0)
+data = data.ffill().fillna(0)
 
 # ========== NOTIFIKASI BREAKOUT & VOLUME ==========
 current_resistance = data['resistance'].iloc[-1]
