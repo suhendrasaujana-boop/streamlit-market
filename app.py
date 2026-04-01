@@ -4,126 +4,20 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ========== KONFIGURASI HALAMAN ==========
 st.set_page_config(layout="wide", page_title="Smart Market Dashboard", page_icon="📊")
 
-# ========== SUPABASE (opsional, jika tidak ada secret akan pakai mode offline) ==========
-try:
-    from supabase import create_client
-    SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
-    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
-    if SUPABASE_URL and SUPABASE_KEY:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    else:
-        supabase = None
-        st.warning("⚠️ Supabase tidak dikonfigurasi. Mode offline (tidak ada login).")
-except Exception:
-    supabase = None
-    st.warning("⚠️ Gagal load Supabase. Mode offline.")
-
-# ========== SESSION STATE ==========
-if 'user' not in st.session_state:
-    st.session_state.user = None
-if 'subscription_expiry' not in st.session_state:
-    st.session_state.subscription_expiry = None
+# ========== SESSION STATE (tanpa login) ==========
 if 'last_resistance' not in st.session_state:
     st.session_state.last_resistance = None
 if 'last_volume_ratio' not in st.session_state:
     st.session_state.last_volume_ratio = 0
 
-# ========== FUNGSI AUTENTIKASI (hanya jika supabase ada) ==========
-def login_user(email, password):
-    if supabase is None:
-        st.error("Mode offline, login tidak tersedia.")
-        return False
-    try:
-        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        st.session_state.user = res.user
-        try:
-            profile = supabase.table('profiles').select('subscription_expiry').eq('id', res.user.id).execute()
-            if profile.data:
-                st.session_state.subscription_expiry = profile.data[0]['subscription_expiry']
-            else:
-                st.session_state.subscription_expiry = None
-        except Exception:
-            st.session_state.subscription_expiry = None
-        st.rerun()
-        return True
-    except Exception as e:
-        st.error(f"Login gagal: {str(e)}")
-        return False
-
-def register_user(email, password):
-    if supabase is None:
-        st.error("Mode offline, registrasi tidak tersedia.")
-        return False
-    try:
-        response = supabase.auth.sign_up({
-            "email": email,
-            "password": password,
-            "options": {"email_redirect_to": "https://smart-market-dashboard.streamlit.app"}
-        })
-        if response.user:
-            st.success("Pendaftaran berhasil! Cek email untuk verifikasi.")
-        else:
-            st.error("Pendaftaran gagal.")
-        return True
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return False
-
-def logout_user():
-    if supabase:
-        supabase.auth.sign_out()
-    st.session_state.user = None
-    st.session_state.subscription_expiry = None
-    st.rerun()
-
-def is_premium():
-    if st.session_state.user is None or st.session_state.subscription_expiry is None:
-        return False
-    try:
-        expiry = datetime.fromisoformat(st.session_state.subscription_expiry.replace('Z', '+00:00'))
-        return datetime.now(expiry.tzinfo) < expiry
-    except Exception:
-        return False
-
+# ========== BATASAN EMITEN (bisa diubah) ==========
 def get_emiten_limit():
-    if st.session_state.user is None:
-        return 3
-    return 5 if is_premium() else 3
-
-# ========== SIDEBAR LOGIN ==========
-with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/stock.png", width=80)
-    st.title("🔐 Akun Saya")
-    if st.session_state.user is None:
-        if supabase is not None:
-            tab1, tab2 = st.tabs(["Login", "Daftar"])
-            with tab1:
-                login_email = st.text_input("Email", key="login_email")
-                login_pass = st.text_input("Password", type="password", key="login_pass")
-                if st.button("Login", use_container_width=True):
-                    login_user(login_email, login_pass)
-            with tab2:
-                reg_email = st.text_input("Email", key="reg_email")
-                reg_pass = st.text_input("Password", type="password", key="reg_pass")
-                if st.button("Daftar", use_container_width=True):
-                    register_user(reg_email, reg_pass)
-        else:
-            st.info("🔓 Mode demo – login tidak diperlukan.")
-    else:
-        st.success(f"👋 Halo, **{st.session_state.user.email}**")
-        if is_premium():
-            expiry = datetime.fromisoformat(st.session_state.subscription_expiry.replace('Z', '+00:00'))
-            sisa_hari = (expiry - datetime.now(expiry.tzinfo)).days
-            st.info(f"✅ Premium aktif: {sisa_hari} hari lagi (akses 5 emiten)")
-        else:
-            st.warning("⚠️ Masa gratis 30 hari telah habis. Beli paket premium.")
-        if st.button("Logout", use_container_width=True):
-            logout_user()
+    return 5  # Akses penuh, bisa diubah ke angka lain
 
 # ========== MAIN DASHBOARD ==========
 st.title("🚀 SMART MARKET DASHBOARD — ALL IN ONE FINAL")
@@ -287,7 +181,7 @@ full_ihsg_list = [
 emiten_limit = get_emiten_limit()
 ihsg_list = full_ihsg_list[:emiten_limit]
 
-st.caption(f"Menampilkan **{len(ihsg_list)}** dari {len(full_ihsg_list)} emiten (batasan untuk akun Anda: {emiten_limit} emiten)")
+st.caption(f"Menampilkan **{len(ihsg_list)}** dari {len(full_ihsg_list)} emiten (batasan: {emiten_limit} emiten)")
 
 @st.cache_data(ttl=1800)
 def scan_market_fast(tickers):
