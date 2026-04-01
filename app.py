@@ -4,16 +4,24 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 import numpy as np
-from supabase import create_client
 from datetime import datetime, timedelta
 
 # ========== KONFIGURASI HALAMAN ==========
 st.set_page_config(layout="wide", page_title="Smart Market Dashboard", page_icon="📊")
 
-# ========== SUPABASE ==========
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ========== SUPABASE (opsional, jika tidak ada secret akan pakai mode offline) ==========
+try:
+    from supabase import create_client
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+    if SUPABASE_URL and SUPABASE_KEY:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    else:
+        supabase = None
+        st.warning("⚠️ Supabase tidak dikonfigurasi. Mode offline (tidak ada login).")
+except Exception:
+    supabase = None
+    st.warning("⚠️ Gagal load Supabase. Mode offline.")
 
 # ========== SESSION STATE ==========
 if 'user' not in st.session_state:
@@ -25,40 +33,50 @@ if 'last_resistance' not in st.session_state:
 if 'last_volume_ratio' not in st.session_state:
     st.session_state.last_volume_ratio = 0
 
-# ========== FUNGSI AUTENTIKASI ==========
+# ========== FUNGSI AUTENTIKASI (hanya jika supabase ada) ==========
 def login_user(email, password):
+    if supabase is None:
+        st.error("Mode offline, login tidak tersedia.")
+        return False
     try:
         res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         st.session_state.user = res.user
-        profile = supabase.table('profiles').select('subscription_expiry').eq('id', res.user.id).execute()
-        if profile.data:
-            st.session_state.subscription_expiry = profile.data[0]['subscription_expiry']
+        try:
+            profile = supabase.table('profiles').select('subscription_expiry').eq('id', res.user.id).execute()
+            if profile.data:
+                st.session_state.subscription_expiry = profile.data[0]['subscription_expiry']
+            else:
+                st.session_state.subscription_expiry = None
+        except Exception:
+            st.session_state.subscription_expiry = None
         st.rerun()
         return True
-    except Exception:
-        st.error("Login gagal. Periksa email dan password.")
+    except Exception as e:
+        st.error(f"Login gagal: {str(e)}")
         return False
 
 def register_user(email, password):
+    if supabase is None:
+        st.error("Mode offline, registrasi tidak tersedia.")
+        return False
     try:
         response = supabase.auth.sign_up({
             "email": email,
             "password": password,
-            "options": {
-                "email_redirect_to": "https://smart-market-dashboard.streamlit.app"
-            }
+            "options": {"email_redirect_to": "https://smart-market-dashboard.streamlit.app"}
         })
         if response.user:
-            st.success("Pendaftaran berhasil! Silakan cek email untuk verifikasi.")
+            st.success("Pendaftaran berhasil! Cek email untuk verifikasi.")
         else:
-            st.error("Pendaftaran gagal, coba lagi.")
+            st.error("Pendaftaran gagal.")
         return True
     except Exception as e:
-        st.error(f"Error detail: {str(e)}")
+        st.error(f"Error: {str(e)}")
         return False
 
 def logout_user():
-    supabase.auth.sign_out()
+    if supabase:
+        supabase.auth.sign_out()
     st.session_state.user = None
     st.session_state.subscription_expiry = None
     st.rerun()
@@ -66,8 +84,11 @@ def logout_user():
 def is_premium():
     if st.session_state.user is None or st.session_state.subscription_expiry is None:
         return False
-    expiry = datetime.fromisoformat(st.session_state.subscription_expiry.replace('Z', '+00:00'))
-    return datetime.now(expiry.tzinfo) < expiry
+    try:
+        expiry = datetime.fromisoformat(st.session_state.subscription_expiry.replace('Z', '+00:00'))
+        return datetime.now(expiry.tzinfo) < expiry
+    except Exception:
+        return False
 
 def get_emiten_limit():
     if st.session_state.user is None:
@@ -79,25 +100,28 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/stock.png", width=80)
     st.title("🔐 Akun Saya")
     if st.session_state.user is None:
-        tab1, tab2 = st.tabs(["Login", "Daftar"])
-        with tab1:
-            login_email = st.text_input("Email", key="login_email")
-            login_pass = st.text_input("Password", type="password", key="login_pass")
-            if st.button("Login", use_container_width=True):
-                login_user(login_email, login_pass)
-        with tab2:
-            reg_email = st.text_input("Email", key="reg_email")
-            reg_pass = st.text_input("Password", type="password", key="reg_pass")
-            if st.button("Daftar", use_container_width=True):
-                register_user(reg_email, reg_pass)
+        if supapse is not None:
+            tab1, tab2 = st.tabs(["Login", "Daftar"])
+            with tab1:
+                login_email = st.text_input("Email", key="login_email")
+                login_pass = st.text_input("Password", type="password", key="login_pass")
+                if st.button("Login", use_container_width=True):
+                    login_user(login_email, login_pass)
+            with tab2:
+                reg_email = st.text_input("Email", key="reg_email")
+                reg_pass = st.text_input("Password", type="password", key="reg_pass")
+                if st.button("Daftar", use_container_width=True):
+                    register_user(reg_email, reg_pass)
+        else:
+            st.info("🔓 Mode demo – login tidak diperlukan.")
     else:
         st.success(f"👋 Halo, **{st.session_state.user.email}**")
         if is_premium():
             expiry = datetime.fromisoformat(st.session_state.subscription_expiry.replace('Z', '+00:00'))
             sisa_hari = (expiry - datetime.now(expiry.tzinfo)).days
-            st.info(f"✅ **Premium aktif**: {sisa_hari} hari lagi (akses 5 emiten)")
+            st.info(f"✅ Premium aktif: {sisa_hari} hari lagi (akses 5 emiten)")
         else:
-            st.warning("⚠️ **Masa gratis 30 hari telah habis.** Beli paket premium untuk akses 5 emiten.")
+            st.warning("⚠️ Masa gratis 30 hari telah habis. Beli paket premium.")
         if st.button("Logout", use_container_width=True):
             logout_user()
 
@@ -114,7 +138,7 @@ timeframe = col2.selectbox("Timeframe", ["1d","1wk","1mo"])
 def load_data(ticker, timeframe):
     df = yf.download(ticker, period="2y", interval=timeframe, progress=False)
     if df.empty:
-        df = yf.download(ticker, period="1y", interval=timeframe, progress=False, auto_adjust=False)
+        df = yf.download(ticker, period="1y", interval=timeframe, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.dropna(how='all')
@@ -124,21 +148,29 @@ def load_data(ticker, timeframe):
 
 data = load_data(ticker, timeframe)
 
-if data.empty or len(data) < 20:
-    st.warning(f"Data tidak mencukupi untuk {ticker}. Minimal 20 periode.")
+if data.empty or len(data) < 5:
+    st.warning(f"Data tidak cukup untuk {ticker} (minimal 5 periode).")
     st.stop()
 
 close = data['Close']
+volume = data['Volume'] if 'Volume' in data.columns else pd.Series(0, index=data.index)
 
-# ========== INDIKATOR TEKNIS ==========
-data['SMA20'] = ta.trend.sma_indicator(close, window=min(20, len(data)-1))
-data['SMA50'] = ta.trend.sma_indicator(close, window=min(50, len(data)-1))
+# ========== INDIKATOR TEKNIS dengan fallback ==========
+def safe_sma(series, window):
+    if len(series) < window:
+        return series.rolling(window, min_periods=1).mean()
+    return ta.trend.sma_indicator(series, window=window)
 
-if len(data) >= 15:
+data['SMA20'] = safe_sma(close, min(20, len(data)-1))
+data['SMA50'] = safe_sma(close, min(50, len(data)-1))
+
+# RSI
+if len(data) >= 14:
     data['RSI'] = ta.momentum.rsi(close, window=14)
 else:
     data['RSI'] = 50.0
 
+# MACD
 if len(data) >= 26:
     macd = ta.trend.MACD(close)
     data['MACD'] = macd.macd()
@@ -147,31 +179,38 @@ else:
     data['MACD'] = 0.0
     data['MACD_signal'] = 0.0
 
-if data['Volume'].sum() > 0:
-    data['Volume_MA'] = data['Volume'].rolling(20, min_periods=1).mean()
+# Volume MA
+if volume.sum() > 0:
+    data['Volume_MA'] = volume.rolling(20, min_periods=1).mean()
 else:
     data['Volume_MA'] = 0.0
 
+# Support/Resistance
 data['support'] = data['Low'].rolling(20, min_periods=1).min()
 data['resistance'] = data['High'].rolling(20, min_periods=1).max()
 
+# Forward fill + fillna(0) -> tidak ada NaN tersisa
 data = data.ffill().fillna(0)
 
 # ========== NOTIFIKASI BREAKOUT & VOLUME ==========
-current_resistance = data['resistance'].iloc[-1]
-current_price = data['Close'].iloc[-1]
-if st.session_state.last_resistance is None:
-    st.session_state.last_resistance = current_resistance
+if not data.empty:
+    current_resistance = data['resistance'].iloc[-1]
+    current_price = data['Close'].iloc[-1]
+    if st.session_state.last_resistance is None:
+        st.session_state.last_resistance = current_resistance
 
-if current_price > current_resistance and current_resistance != st.session_state.last_resistance:
-    st.toast(f"🚀 BREAKOUT! Harga menembus resistance {current_resistance:.2f}", icon="🚀")
-    st.session_state.last_resistance = current_resistance
+    if current_price > current_resistance and current_resistance != st.session_state.last_resistance:
+        st.toast(f"🚀 BREAKOUT! Harga menembus resistance {current_resistance:.2f}", icon="🚀")
+        st.session_state.last_resistance = current_resistance
 
-if data['Volume'].sum() > 0:
-    volume_ratio = data['Volume'].iloc[-1] / data['Volume_MA'].iloc[-1] if data['Volume_MA'].iloc[-1] > 0 else 0
-    if volume_ratio > 1.8 and volume_ratio != st.session_state.last_volume_ratio:
-        st.toast(f"🔥 Volume Spike! {volume_ratio:.1f}x rata-rata", icon="⚠️")
-        st.session_state.last_volume_ratio = volume_ratio
+    if volume.sum() > 0:
+        vol_last = volume.iloc[-1]
+        vol_ma = data['Volume_MA'].iloc[-1]
+        if vol_ma > 0:
+            volume_ratio = vol_last / vol_ma
+            if volume_ratio > 1.8 and volume_ratio != st.session_state.last_volume_ratio:
+                st.toast(f"🔥 Volume Spike! {volume_ratio:.1f}x rata-rata", icon="⚠️")
+                st.session_state.last_volume_ratio = volume_ratio
 
 # ========== CANDLESTICK CHART ==========
 fig = go.Figure()
@@ -184,8 +223,8 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ========== VOLUME ==========
 st.subheader("Volume")
-if data['Volume'].sum() > 0:
-    st.bar_chart(data['Volume'])
+if volume.sum() > 0:
+    st.bar_chart(volume)
 else:
     st.info("Volume tidak tersedia untuk indeks (IHSG)")
 
@@ -205,8 +244,8 @@ try:
     if pd.notna(data['Close'].iloc[-1]) and pd.notna(data['SMA20'].iloc[-1]) and data['Close'].iloc[-1] > data['SMA20'].iloc[-1]: score += 1
     if pd.notna(data['SMA20'].iloc[-1]) and pd.notna(data['SMA50'].iloc[-1]) and data['SMA20'].iloc[-1] > data['SMA50'].iloc[-1]: score += 1
     if pd.notna(data['MACD'].iloc[-1]) and pd.notna(data['MACD_signal'].iloc[-1]) and data['MACD'].iloc[-1] > data['MACD_signal'].iloc[-1]: score += 1
-    if data['Volume'].sum() > 0 and pd.notna(data['Volume'].iloc[-1]) and pd.notna(data['Volume_MA'].iloc[-1]) and data['Volume'].iloc[-1] > data['Volume_MA'].iloc[-1]: score += 1
-except:
+    if volume.sum() > 0 and pd.notna(volume.iloc[-1]) and pd.notna(data['Volume_MA'].iloc[-1]) and volume.iloc[-1] > data['Volume_MA'].iloc[-1]: score += 1
+except Exception:
     pass
 
 st.subheader("🤖 AI Score")
@@ -239,14 +278,12 @@ else:
 # ========== IHSG SCANNER DENGAN BATASAN EMITEN ==========
 st.subheader("🔥 SUPER FAST IHSG SCANNER (15 Blue Chip)")
 
-# Daftar lengkap 15 saham blue chip
 full_ihsg_list = [
     "BBRI.JK","BBCA.JK","BMRI.JK","TLKM.JK","ASII.JK",
     "ADRO.JK","ANTM.JK","MDKA.JK","UNTR.JK","ICBP.JK",
     "INDF.JK","UNVR.JK","SMGR.JK","CPIN.JK","JPFA.JK"
 ]
 
-# Batasi berdasarkan status user
 emiten_limit = get_emiten_limit()
 ihsg_list = full_ihsg_list[:emiten_limit]
 
@@ -258,14 +295,13 @@ def scan_market_fast(tickers):
     rows = []
     for ticker in tickers:
         try:
+            if ticker not in all_data.columns.levels[0]:
+                continue
             df = all_data[ticker].dropna()
             if len(df) < 20:
                 continue
             close = df['Close']
-            if len(close) >= 14:
-                rsi = ta.momentum.rsi(close, window=14).iloc[-1]
-            else:
-                rsi = 50
+            rsi = ta.momentum.rsi(close, window=14).iloc[-1] if len(close) >= 14 else 50
             sma20 = close.rolling(20).mean().iloc[-1]
             if pd.isna(sma20):
                 sma20 = close.iloc[-1]
@@ -335,8 +371,8 @@ else:
 
 # ========== VOLUME ALERT ==========
 st.subheader("🚨 Volume Alert")
-if data['Volume'].sum() > 0:
-    if data['Volume'].iloc[-1] > data['Volume_MA'].iloc[-1] * 1.8:
+if volume.sum() > 0:
+    if volume.iloc[-1] > data['Volume_MA'].iloc[-1] * 1.8:
         st.success("Volume Spike Detected")
     else:
         st.write("Normal Volume")
@@ -365,7 +401,7 @@ if risk == "LOW":
     final_score += 1
 if momentum > 2:
     final_score += 1
-if data['Volume'].sum() > 0 and data['Volume'].iloc[-1] > data['Volume_MA'].iloc[-1]:
+if volume.sum() > 0 and volume.iloc[-1] > data['Volume_MA'].iloc[-1]:
     final_score += 1
 if final_score >= 3:
     st.success("🚀 STRONG ACCUMULATE")
