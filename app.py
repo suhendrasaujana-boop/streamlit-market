@@ -27,12 +27,28 @@ def format_number(x):
         return "N/A"
     return f"{x:,.2f}"
 
+def fix_ticker(ticker):
+    """Otomatis tambahkan .JK jika diperlukan (kecuali indeks)"""
+    ticker = ticker.strip().upper()
+    if ticker.startswith('^') or ticker.endswith('.JK'):
+        return ticker
+    return ticker + '.JK'
+
 # ========== SIDEBAR ==========
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/stock.png", width=80)
-    st.title("📊 Smart Market Dashboard")
+    # Gunakan emoji sebagai ikon (stabil, tidak bergantung URL)
+    st.markdown("# 📊 Smart Market Dashboard")
     
-    ticker = st.text_input("Ticker", "^JKSE", help="Contoh: BBCA.JK, BBRI.JK, atau ^JKSE untuk IHSG")
+    ticker_input = st.text_input(
+        "Ticker",
+        "^JKSE",
+        help="Contoh: BBCA, BBRI, ASII, atau ^JKSE untuk IHSG. Anda boleh ketik tanpa .JK, akan otomatis ditambahkan."
+    )
+    # Perbaiki ticker (tambahkan .JK jika perlu)
+    ticker = fix_ticker(ticker_input)
+    if ticker != ticker_input:
+        st.info(f"Format ticker disesuaikan menjadi: {ticker}")
+    
     timeframe = st.selectbox("Timeframe", ["1d","1wk","1mo"], help="1d = harian, 1wk = mingguan, 1mo = bulanan")
     
     # Tombol refresh manual
@@ -197,7 +213,6 @@ tab1, tab2, tab3, tab4 = st.tabs(["📈 Grafik & Indikator", "🤖 AI Signal & R
 
 # ========== TAB 1: GRAFIK ==========
 with tab1:
-    # Candlestick + SMA + Support/Resistance
     st.subheader("Candlestick Chart")
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'],
@@ -424,7 +439,7 @@ with tab2:
     else:
         st.error("🔴 AVOID")
 
-# ========== TAB 3: IHSG SCANNER ==========
+# ========== TAB 3: IHSG SCANNER (DIPERBAIKI) ==========
 with tab3:
     st.subheader("🔥 SUPER FAST IHSG SCANNER (15 Blue Chip)")
 
@@ -463,7 +478,10 @@ with tab3:
         st.dataframe(scan_df.sort_values("Score", ascending=False), use_container_width=True)
         st.subheader("🚀 TOP 5 BUY")
         top5 = scan_df.sort_values("Score", ascending=False).head(5)
-        st.table(top5)
+        if not top5.empty:
+            st.table(top5)
+        else:
+            st.info("Tidak ada saham dengan score > 0")
     else:
         st.warning("Scanner gagal, coba lagi nanti.")
 
