@@ -7,11 +7,32 @@ import numpy as np
 from datetime import datetime, date, timedelta
 import time
 from typing import Dict, List, Optional, Tuple, Any
-import feedparser
-from textblob import TextBlob
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+
+# ========== IMPORT OPSIONAL DENGAN PENANGANAN ERROR ==========
+# Library untuk sentimen berita
+try:
+    import feedparser
+    FEEDPARSER_AVAILABLE = True
+except ImportError:
+    FEEDPARSER_AVAILABLE = False
+    st.warning("⚠️ Library 'feedparser' tidak terinstal. Fitur sentimen berita dinonaktifkan. Install dengan: pip install feedparser")
+
+try:
+    from textblob import TextBlob
+    TEXTBLOB_AVAILABLE = True
+except ImportError:
+    TEXTBLOB_AVAILABLE = False
+    st.warning("⚠️ Library 'textblob' tidak terinstal. Fitur sentimen berita dinonaktifkan. Install dengan: pip install textblob")
+
+# Library untuk machine learning
+try:
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    st.warning("⚠️ Library 'scikit-learn' tidak terinstal. Fitur machine learning dinonaktifkan. Install dengan: pip install scikit-learn")
 
 # ========== KONSTANTA ==========
 TIMEFRAMES = {"1d": "1d", "1wk": "1wk", "1mo": "1mo"}
@@ -60,7 +81,6 @@ def should_notify_breakout(current_price: float, resistance: float) -> bool:
         return False
     if st.session_state.last_resistance is None:
         return True
-    # Notifikasi jika resistance naik (breakout level baru) atau sudah lewat cooldown
     if resistance > st.session_state.last_resistance:
         return True
     if st.session_state.last_breakout_notify_time is None:
@@ -251,19 +271,17 @@ def get_portfolio_current_prices(tickers: List[str]) -> Dict[str, Optional[float
         st.error(f"Error fetching portfolio prices: {e}")
         return {t: None for t in tickers}
 
-# ========== FUNGSI BARU: BACKTESTING, ML, DIVERSIFIKASI ==========
-# ==== BARU: Backtesting sederhana ====
-def backtest_strategy(df, initial_capital=1000000, signal_func=None):
-    """Backtest strategi berdasarkan fungsi sinyal"""
+# ========== FUNGSI BARU DENGAN PENANGANAN KETERSEDIAAN LIBRARY ==========
+def backtest_strategy(df, initial_capital=1000000):
+    """Backtest strategi sederhana (hanya jika data cukup)"""
     if df.empty or len(df) < 50:
         return None
     df = df.copy()
-    # Buat indikator dasar
     df['sma20'] = df['Close'].rolling(20).mean()
     df['sma50'] = df['Close'].rolling(50).mean()
     df['rsi'] = ta.momentum.rsi(df['Close'], window=14)
     df['volume_ma'] = df['Volume'].rolling(20).mean()
-    # Sinyal beli: RSI < 35 dan Close > SMA20 (dapat disesuaikan)
+    # Sinyal beli: RSI < 35 dan Close > SMA20
     df['buy_signal'] = (df['rsi'] < 35) & (df['Close'] > df['sma20'])
     df['sell_signal'] = (df['rsi'] > 70) | (df['Close'] < df['sma20'])
     # Simulasi
@@ -289,20 +307,19 @@ def backtest_strategy(df, initial_capital=1000000, signal_func=None):
         'trades': trades
     }
 
-# ==== BARU: Machine Learning untuk prediksi ====
 def prepare_ml_features(df):
-    """Siapkan fitur dan target untuk ML"""
+    """Siapkan fitur dan target untuk ML (hanya jika sklearn tersedia)"""
+    if not SKLEARN_AVAILABLE:
+        return None, None
     if df.empty or len(df) < 100:
         return None, None
     df = df.copy()
-    # Fitur teknikal
     df['rsi'] = ta.momentum.rsi(df['Close'], window=14)
     df['sma20'] = df['Close'].rolling(20).mean()
     df['sma50'] = df['Close'].rolling(50).mean()
     df['volume_ma'] = df['Volume'].rolling(20).mean()
     df['ad'] = ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume'], fillna=True)
     df['cmf'] = ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20, fillna=True)
-    # Target: apakah harga 5 hari ke depan naik >1%?
     df['future_return'] = df['Close'].shift(-5) / df['Close'] - 1
     df['target'] = (df['future_return'] > 0.01).astype(int)
     df = df.dropna()
@@ -313,24 +330,23 @@ def prepare_ml_features(df):
     y = df['target']
     return X, y
 
-# ==== BARU: Sentimen berita sederhana ====
-@st.cache_data(ttl=3600)
 def get_news_sentiment():
-    """Ambil sentimen dari RSS (contoh: Kompas)"""
+    """Ambil sentimen dari RSS (hanya jika feedparser dan textblob tersedia)"""
+    if not (FEEDPARSER_AVAILABLE and TEXTBLOB_AVAILABLE):
+        return None
     try:
-        # Contoh RSS – bisa diganti dengan sumber lain
-        feed = feedparser.parse('https://bisnis.tempo.co/indeks.xml')
+        # Gunakan RSS yang lebih stabil (contoh: CNBC Indonesia)
+        feed = feedparser.parse('https://www.cnbcindonesia.com/news/rss')
         sentiments = []
         for entry in feed.entries[:10]:
             blob = TextBlob(entry.title)
             sentiments.append(blob.sentiment.polarity)
         if sentiments:
-            avg = sum(sentiments)/len(sentiments)
-            return avg
+            return sum(sentiments) / len(sentiments)
         else:
             return 0.0
-    except:
-        return 0.0
+    except Exception:
+        return None
 
 # ========== SIDEBAR ==========
 with st.sidebar:
@@ -356,7 +372,7 @@ if data.empty or len(data) < 5:
 
 data = add_indicators(data)
 
-# Notifikasi breakout & volume (tetap)
+# Notifikasi breakout & volume
 if not data.empty:
     current_resistance = data['resistance'].iloc[-1]
     current_price = data['Close'].iloc[-1]
@@ -405,10 +421,9 @@ st.markdown(f"""
 st.markdown("---")
 
 # ========== TABS ==========
-# Tab baru: tambahkan "Backtest & ML" setelah Scanner
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Grafik", "🤖 AI Signal", "🔍 Scanner", "📁 Portfolio", "🧪 Backtest & ML", "📖 Info"])
 
-# ========== TAB 1: GRAFIK (tidak berubah) ==========
+# ========== TAB 1: GRAFIK ==========
 with tab1:
     st.subheader("Candlestick Chart")
     fig = go.Figure()
@@ -446,7 +461,7 @@ with tab1:
     with col_cmf:
         st.line_chart(data['CMF'])
 
-# ========== TAB 2: AI SIGNAL (tidak berubah) ==========
+# ========== TAB 2: AI SIGNAL ==========
 with tab2:
     # AI Score
     score = calculate_ai_score(data, volume)
@@ -469,7 +484,7 @@ with tab2:
                 periods_per_year = 252
             elif timeframe == "1wk":
                 periods_per_year = 52
-            else:  # "1mo"
+            else:
                 periods_per_year = 12
             daily_vol = returns.std()
             annual_vol = daily_vol * np.sqrt(periods_per_year) * 100
@@ -631,7 +646,7 @@ with tab2:
     else:
         st.error("🔴 AVOID")
 
-# ========== TAB 3: SCANNER (tidak berubah) ==========
+# ========== TAB 3: SCANNER ==========
 with tab3:
     st.subheader("🔥 SUPER FAST IHSG SCANNER (15 Blue Chip)")
     with st.spinner("Memindai 15 saham..."):
@@ -647,7 +662,7 @@ with tab3:
     else:
         st.warning("Scanner gagal, coba lagi nanti.")
 
-# ========== TAB 4: PORTFOLIO (tidak berubah) ==========
+# ========== TAB 4: PORTFOLIO ==========
 with tab4:
     st.subheader("📁 Portfolio Tracker")
     with st.expander("➕ Tambah Posisi Baru"):
@@ -711,7 +726,7 @@ with tab4:
     else:
         st.info("Masukkan modal, risiko, dan stop loss untuk menghitung.")
 
-# ========== TAB 5: BACKTEST & ML (BARU) ==========
+# ========== TAB 5: BACKTEST & ML ==========
 with tab5:
     st.header("🧪 Backtesting & Machine Learning")
     
@@ -732,36 +747,42 @@ with tab5:
     
     # Machine Learning
     st.subheader("🤖 Machine Learning Prediction (Random Forest)")
-    X, y = prepare_ml_features(data)
-    if X is not None and len(X) > 50:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=False)
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(X_train, y_train)
-        acc = accuracy_score(y_test, model.predict(X_test))
-        st.metric("Akurasi Model (Test)", f"{acc:.2%}")
-        # Prediksi untuk hari ini
-        latest = X.iloc[-1:].values
-        prob = model.predict_proba(latest)[0][1]
-        st.write(f"**Probabilitas harga naik >1% dalam 5 hari:** {prob:.2%}")
-        # Feature importance
-        if st.checkbox("Tampilkan Feature Importance"):
-            importance = pd.DataFrame({'Feature': X.columns, 'Importance': model.feature_importances_})
-            st.bar_chart(importance.set_index('Feature'))
+    if SKLEARN_AVAILABLE:
+        X, y = prepare_ml_features(data)
+        if X is not None and len(X) > 50:
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=False)
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model.fit(X_train, y_train)
+            acc = accuracy_score(y_test, model.predict(X_test))
+            st.metric("Akurasi Model (Test)", f"{acc:.2%}")
+            # Prediksi untuk hari ini
+            latest = X.iloc[-1:].values
+            prob = model.predict_proba(latest)[0][1]
+            st.write(f"**Probabilitas harga naik >1% dalam 5 hari:** {prob:.2%}")
+            # Feature importance
+            if st.checkbox("Tampilkan Feature Importance"):
+                importance = pd.DataFrame({'Feature': X.columns, 'Importance': model.feature_importances_})
+                st.bar_chart(importance.set_index('Feature'))
+        else:
+            st.warning("Data tidak cukup untuk melatih model (minimal 100 baris setelah preprocessing).")
     else:
-        st.warning("Data tidak cukup untuk melatih model (minimal 100 baris setelah preprocessing).")
+        st.error("❌ Machine learning tidak tersedia karena library 'scikit-learn' tidak terinstal. Install dengan: pip install scikit-learn")
     
     st.divider()
     
     # Sentimen Berita (Diversifikasi)
     st.subheader("📰 Sentimen Berita (Diversifikasi)")
-    sentiment = get_news_sentiment()
-    if sentiment != 0:
-        sentiment_text = "Positif" if sentiment > 0 else "Negatif" if sentiment < 0 else "Netral"
-        st.metric("Sentimen 24 Jam", f"{sentiment_text} ({sentiment:.2f})")
+    if FEEDPARSER_AVAILABLE and TEXTBLOB_AVAILABLE:
+        sentiment = get_news_sentiment()
+        if sentiment is not None:
+            sentiment_text = "Positif" if sentiment > 0 else "Negatif" if sentiment < 0 else "Netral"
+            st.metric("Sentimen 24 Jam", f"{sentiment_text} ({sentiment:.2f})")
+        else:
+            st.info("Gagal mengambil sentimen berita. Cek koneksi atau RSS feed.")
     else:
-        st.info("Sentimen tidak tersedia (RSS mungkin error).")
+        st.error("❌ Fitur sentimen tidak tersedia karena library 'feedparser' dan/atau 'textblob' tidak terinstal. Install dengan: pip install feedparser textblob")
 
-# ========== TAB 6: INFO (ditambah sentimen & diversifikasi) ==========
+# ========== TAB 6: INFO ==========
 with tab6:
     if not ticker.startswith('^'):
         st.subheader("📊 Fundamental Details")
@@ -787,15 +808,16 @@ with tab6:
     
     st.divider()
     
-    # ==== BARU: Tampilkan juga sentimen berita di sini (opsional) ====
-    st.subheader("📰 Diversifikasi Sinyal: Sentimen Berita Terkini")
-    sentiment = get_news_sentiment()
-    if sentiment != 0:
-        sentiment_text = "Positif" if sentiment > 0 else "Negatif" if sentiment < 0 else "Netral"
-        st.metric("Sentimen 24 Jam", f"{sentiment_text} ({sentiment:.2f})")
-        st.caption("Sumber: RSS Tempo Bisnis (contoh). Sentimen dihitung dari judul berita.")
-    else:
-        st.info("Tidak dapat mengambil sentimen saat ini.")
+    # Menampilkan sentimen di tab info juga (opsional)
+    if FEEDPARSER_AVAILABLE and TEXTBLOB_AVAILABLE:
+        st.subheader("📰 Diversifikasi Sinyal: Sentimen Berita Terkini")
+        sentiment = get_news_sentiment()
+        if sentiment is not None:
+            sentiment_text = "Positif" if sentiment > 0 else "Negatif" if sentiment < 0 else "Netral"
+            st.metric("Sentimen 24 Jam", f"{sentiment_text} ({sentiment:.2f})")
+            st.caption("Sumber: CNBC Indonesia RSS (contoh). Sentimen dihitung dari judul berita.")
+        else:
+            st.info("Tidak dapat mengambil sentimen saat ini.")
     
     with st.expander("📖 Glossary (Klik untuk lihat)"):
         st.markdown("""
